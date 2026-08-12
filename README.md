@@ -67,7 +67,7 @@ safehouse serve
 
 ## AI Disclaimer
 
-This project was generated with substantial assistance from large language models (LLMs). While the code compiles, passes tests, and is structurally sound, it has not been exhaustively audited by a human. Use at your own risk — review the code before running in production, especially the security-sensitive components (auth, session management, RCON credential handling).
+The architecture, design, and implementation plan for this project were created by a human. Code implementation was generated with assistance from large language models (LLMs) and subsequently reviewed. While the code compiles, passes tests, and has been audited, use discretion before running in production — especially the security-sensitive components (auth, session management, RCON credential handling).
 
 ## License
 
