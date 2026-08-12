@@ -65,6 +65,10 @@ safehouse serve
 - Session cookies are signed with a 64-byte secret (auto-generated on first `serve`) but transmitted over plain HTTP unless you use a TLS proxy.
 - Web UI passwords are hashed with Argon2id.
 
+## AI Disclaimer
+
+This project was generated with substantial assistance from large language models (LLMs). While the code compiles, passes tests, and is structurally sound, it has not been exhaustively audited by a human. Use at your own risk — review the code before running in production, especially the security-sensitive components (auth, session management, RCON credential handling).
+
 ## License
 
 AGPL-3.0-only
