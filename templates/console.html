@@ -1,0 +1,16 @@
+{% extends "base.html" %} {% block title %}Console{% endblock %} {% block
+content %}
+<h2>RCON Console</h2>
+<form hx-post="/console/exec" hx-target="#output" hx-swap="innerHTML">
+  <input
+    type="text"
+    name="command"
+    placeholder="RCON command"
+    autofocus
+    style="width: 60%"
+  />
+  <button type="submit" class="btn btn-primary">Send</button>
+</form>
+<pre id="output">
+{% match output %}{% when Some with (text) %}{{ text }}{% when None %}{% endmatch %}</pre>
+{% endblock %}

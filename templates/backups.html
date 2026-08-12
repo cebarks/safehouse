@@ -1,0 +1,27 @@
+{% extends "base.html" %} {% block title %}Backups{% endblock %} {% block
+content %}
+<h2>Backups</h2>
+{% match message %} {% when Some with (msg) %}
+<p class="info">{{ msg }}</p>
+{% when None %} {% endmatch %}
+<form method="post" action="/backups/create" style="margin-bottom: 1rem">
+  <input type="text" name="label" placeholder="Label (optional)" />
+  <button type="submit" class="btn btn-primary">Create Backup</button>
+</form>
+<table>
+  <thead>
+    <tr>
+      <th>Filename</th>
+      <th>Size</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in snapshots %}
+    <tr>
+      <td>{{ s.0 }}</td>
+      <td>{{ s.1 }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

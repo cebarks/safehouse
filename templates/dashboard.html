@@ -1,0 +1,16 @@
+{% extends "base.html" %} {% block title %}Dashboard{% endblock %} {% block
+content %}
+<h2>Dashboard</h2>
+<div class="status-card {% if running %}running{% else %}stopped{% endif %}">
+  <span class="status-dot"></span>
+  {% if running %}<strong>Running</strong>{% else %}<strong>Stopped</strong>{%
+  endif %} — {{ server_name }}
+</div>
+{% match player_count %} {% when Some with (count) %}
+<p><strong>Players:</strong> {{ count }}</p>
+{% when None %} {% endmatch %} {% if !recent_log.is_empty() %}
+<h3>Recent Log</h3>
+<pre>
+{% for line in recent_log %}{{ line }}
+{% endfor %}</pre>
+{% endif %} {% endblock %}

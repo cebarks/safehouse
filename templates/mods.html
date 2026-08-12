@@ -1,0 +1,45 @@
+{% extends "base.html" %} {% block title %}Mods{% endblock %} {% block content
+%}
+<h2>Workshop Mods</h2>
+{% match message %} {% when Some with (msg) %}
+<p class="info">{{ msg }}</p>
+{% when None %} {% endmatch %}
+<form method="post" action="/mods/add" style="margin-bottom: 1rem">
+  <input type="text" name="workshop_id" placeholder="Workshop ID" />
+  <input type="text" name="mod_name" placeholder="Mod folder name" />
+  <button type="submit" class="btn btn-primary">Add Mod</button>
+</form>
+<table>
+  <thead>
+    <tr>
+      <th>Workshop ID</th>
+      <th>Folder</th>
+      <th>Title</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in mods %}
+    <tr>
+      <td>{{ m.0 }}</td>
+      <td>{{ m.1 }}</td>
+      <td>{{ m.2 }}</td>
+      <td>
+        <form method="post" action="/mods/remove" style="display: inline">
+          <input type="hidden" name="workshop_id" value="{{ m.0 }}" />
+          <input type="hidden" name="mod_name" value="{{ m.1 }}" />
+          <button type="submit" class="btn btn-danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if !profiles.is_empty() %}
+<h3>Profiles</h3>
+<ul>
+  {% for p in profiles %}
+  <li>{{ p }}</li>
+  {% endfor %}
+</ul>
+{% endif %} {% endblock %}

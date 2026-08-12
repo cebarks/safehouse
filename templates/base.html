@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Safehouse — {% block title %}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/htmx.min.js" defer></script>
+  </head>
+  <body>
+    {% block nav %}
+    <nav class="nav">
+      <span class="nav-brand">🏠 Safehouse</span>
+      <a href="/">Dashboard</a>
+      <a href="/config">Config</a>
+      <a href="/mods">Mods</a>
+      <a href="/backups">Backups</a>
+      <a href="/console">Console</a>
+      <a href="/logs">Logs</a>
+      <a href="/logout" class="nav-right">Logout</a>
+    </nav>
+    {% endblock %}
+    <main class="main">{% block content %}{% endblock %}</main>
+  </body>
+</html>

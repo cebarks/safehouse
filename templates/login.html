@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Safehouse — Login</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body class="login-body">
+    <div class="login-box">
+      <h1>🏠 Safehouse</h1>
+      {% match error %} {% when Some with (err) %}
+      <p class="error">{{ err }}</p>
+      {% when None %} {% endmatch %}
+      <form method="post" action="/login">
+        <label>Username <input type="text" name="username" autofocus /></label>
+        <label>Password <input type="password" name="password" /></label>
+        <button type="submit">Login</button>
+      </form>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,33 @@
+{% extends "base.html" %} {% block title %}Config{% endblock %} {% block content
+%}
+<h2>Server Config</h2>
+{% match message %} {% when Some with (msg) %}
+<p class="info">{{ msg }}</p>
+{% when None %} {% endmatch %}
+<h3>server.ini</h3>
+<pre>{{ ini_content }}</pre>
+<form method="post" action="/config/set" style="margin-bottom: 2rem">
+  <input type="hidden" name="file" value="ini" />
+  <input
+    type="text"
+    name="key"
+    placeholder="Key (e.g. MaxPlayers)"
+    style="width: 30%"
+  />
+  <input type="text" name="value" placeholder="Value" style="width: 30%" />
+  <button type="submit" class="btn btn-primary">Set</button>
+</form>
+<h3>SandboxVars.lua</h3>
+<pre>{{ sandbox_content }}</pre>
+<form method="post" action="/config/set">
+  <input type="hidden" name="file" value="sandbox" />
+  <input
+    type="text"
+    name="key"
+    placeholder="Key (e.g. Zombies.Speed)"
+    style="width: 30%"
+  />
+  <input type="text" name="value" placeholder="Value" style="width: 30%" />
+  <button type="submit" class="btn btn-primary">Set</button>
+</form>
+{% endblock %}
