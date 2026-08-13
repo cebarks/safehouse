@@ -62,18 +62,19 @@ impl SafehouseDirs {
         Ok(())
     }
 
-    /// Resolve the server config file path: <zomboid_dir>/server/<name>.ini
+    /// Resolve the server config file path: <zomboid_dir>/Server/<name>.ini
+    /// Note: PZ uses capital-S "Server" on Linux.
     pub fn server_ini(&self, config: &SafehouseConfig) -> PathBuf {
         config
             .zomboid_dir()
-            .join("server")
+            .join("Server")
             .join(format!("{}.ini", config.server_name))
     }
 
     pub fn sandbox_lua(&self, config: &SafehouseConfig) -> PathBuf {
         config
             .zomboid_dir()
-            .join("server")
+            .join("Server")
             .join(format!("{}_SandboxVars.lua", config.server_name))
     }
 
@@ -89,7 +90,7 @@ impl SafehouseDirs {
     pub fn latest_log(&self, config: &SafehouseConfig) -> Option<PathBuf> {
         let pattern = config
             .zomboid_dir()
-            .join("server")
+            .join("Server")
             .join(format!("{}_*.txt", config.server_name))
             .to_string_lossy()
             .to_string();

@@ -7,6 +7,7 @@ use tokio::process::Command;
 use super::common::CliContext;
 use super::ServerAction;
 use crate::pz::detect::{find_server_binary, is_server_running, read_pid};
+use crate::pz::ini::IniEditor;
 
 pub async fn run(action: &ServerAction, ctx: &CliContext) -> Result<()> {
     match action {
@@ -28,19 +29,71 @@ async fn start(ctx: &CliContext, timeout_secs: u64) -> Result<()> {
         .context("cannot acquire PID file lock")?;
 
     let install_dir = &ctx.config.server_install_dir;
-    let binary = find_server_binary(install_dir)
+    // Verify the PZ install is valid
+    let _binary = find_server_binary(install_dir)
         .with_context(|| format!("PZ binary not found in {}", install_dir.display()))?;
+    // Use start-server.sh wrapper which sets up LD_LIBRARY_PATH, PATH, and JRE
+    let launcher = install_dir.join("start-server.sh");
+    if !launcher.exists() {
+        bail!("start-server.sh not found in {} — is the PZ dedicated server installed correctly?",
+              install_dir.display());
+    }
 
     println!("Starting PZ server '{}'...", ctx.config.server_name);
 
-    let child = Command::new(&binary)
-        .arg("-servername")
-        .arg(&ctx.config.server_name)
-        .arg("-rconpassword")
-        .arg(&ctx.config.rcon_password)
+    // Ensure ~/Zomboid/server/ directory exists for first-run .ini generation
+    let server_ini_path = ctx.dirs.server_ini(&ctx.config);
+    if let Some(parent) = server_ini_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create server config dir {}", parent.display()))?;
+    }
+
+    // Write RCON settings into server.ini before start (PZ has no -rconpassword CLI flag).
+    // If the .ini doesn't exist yet (first run), PZ will generate it — we create a
+    // minimal stub so RCON is enabled from the very first boot.
+    if !ctx.config.rcon_password.is_empty() {
+        if server_ini_path.exists() {
+            let mut ini = IniEditor::load(&server_ini_path)
+                .with_context(|| format!("cannot read {}", server_ini_path.display()))?;
+            ini.set("RCONPassword", &ctx.config.rcon_password);
+            ini.set("RCONPort", &ctx.config.rcon_port.to_string());
+            ini.save(&server_ini_path)?;
+        } else {
+            let content = format!(
+                "RCONPassword={}\nRCONPort={}\n",
+                ctx.config.rcon_password, ctx.config.rcon_port
+            );
+            std::fs::write(&server_ini_path, content)
+                .with_context(|| format!("cannot write {}", server_ini_path.display()))?;
+        }
+        tracing::info!("Wrote RCON settings to {}", server_ini_path.display());
+    }
+
+    // Capture PZ stdout/stderr to log files so startup failures are diagnosable
+    let log_dir = ctx.dirs.log_dir();
+    std::fs::create_dir_all(&log_dir)?;
+    let stdout_path = log_dir.join("pz-stdout.log");
+    let stderr_path = log_dir.join("pz-stderr.log");
+    let stdout_file = std::fs::File::create(&stdout_path)
+        .with_context(|| format!("cannot create {}", stdout_path.display()))?;
+    let stderr_file = std::fs::File::create(&stderr_path)
+        .with_context(|| format!("cannot create {}", stderr_path.display()))?;
+
+    let mut cmd = Command::new(&launcher);
+    cmd.arg("-servername")
+        .arg(&ctx.config.server_name);
+
+    // Pass -adminpassword so PZ doesn't prompt interactively on first run
+    if !ctx.config.rcon_password.is_empty() {
+        cmd.arg("-adminpassword")
+            .arg(&ctx.config.rcon_password);
+    }
+
+    let child = cmd
         .current_dir(install_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
         .spawn()
         .context("failed to spawn server process")?;
 
