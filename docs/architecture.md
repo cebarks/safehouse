@@ -1,6 +1,6 @@
 # Architecture
 
-Safehouse is a single Rust binary that combines a CLI (clap) with an embedded web server (actix-web). All state lives in a SQLite database and a TOML config file.
+Safehouse is a Rust binary that manages a Project Zomboid dedicated server running inside a podman container. It communicates with the server via RCON and with podman via the bollard API over the local socket.
 
 ## Module Map
 
@@ -11,15 +11,24 @@ src/
 │
 ├── config.rs            # SafehouseConfig — TOML serialization, defaults, session secret
 ├── dirs.rs              # SafehouseDirs — path resolution for all disk locations
+├── container.rs         # Podman container lifecycle via bollard (create/start/stop/logs)
 ├── backup.rs            # Backup engine — tar.gz create/restore/list/prune
-├── notify.rs            # Discord webhook — event types, payload builder, sender
+├── notify.rs            # Discord webhook notifications
 │
-├── logging/
-│   └── mod.rs           # Tracing initialization (env-filter, verbosity levels)
+├── cli/
+│   ├── mod.rs           # Clap command/subcommand definitions
+│   ├── common.rs        # CliContext (shared config, dirs, db handle)
+│   ├── setup.rs         # Initial PZ install via SteamCMD
+│   ├── server.rs        # Server lifecycle — start/stop/restart/status/logs via container
+│   ├── config.rs        # INI/sandbox show/set, config presets
+│   ├── mods.rs          # Workshop mod add/remove, profiles
+│   ├── backup.rs        # Backup create/restore/list/prune
+│   ├── console.rs       # RCON commands (players, chat, kick, ban, give, save)
+│   ├── webhook.rs       # Discord webhook setup/test
+│   └── serve.rs         # Web server startup, log watcher, signal handling
 │
 ├── db/
-│   ├── mod.rs           # Database struct (rusqlite Connection), open/migrate
-│   ├── schema.rs        # Migration runner (user_version pragma)
+│   ├── mod.rs           # Database struct, SQLite open, migration runner
 │   ├── users.rs         # User auth (argon2 hash/verify)
 │   ├── mods.rs          # Workshop mod cache, mod profiles
 │   ├── backups.rs       # Backup snapshot records
@@ -27,31 +36,18 @@ src/
 │
 ├── pz/
 │   ├── mod.rs           # PZ module declarations
-│   ├── detect.rs        # Binary detection, PID file, flock, is_running
+│   ├── detect.rs        # Binary detection, PID utilities
 │   ├── ini.rs           # IniEditor — comment-preserving server.ini parser
 │   ├── sandbox.rs       # SandboxEditor — Lua nested table parser (dotted keys)
 │   ├── rcon.rs          # Source RCON protocol client (TCP)
-│   ├── logs.rs          # PZ log parser (player connect/disconnect regex)
-│   └── mods.rs          # Mod list helpers (add/remove from both ini lists)
+│   ├── logs.rs          # Log file parser (player connect/disconnect events)
+│   └── mods.rs          # Mod list sync (workshop IDs ↔ mod folder names)
 │
 ├── steam/
-│   ├── mod.rs           # Re-exports
-│   └── workshop.rs      # Steam Workshop API client (GetPublishedFileDetails)
-│
-├── cli/
-│   ├── mod.rs           # Cli struct, Command enum, all subcommand enums
-│   ├── common.rs        # CliContext (config + dirs + db + http client)
-│   ├── setup.rs         # SteamCMD install, config creation
-│   ├── server.rs        # start/stop/restart/status/logs
-│   ├── config.rs        # show/set ini/sandbox, presets
-│   ├── mods.rs          # list/add/remove/info, profiles
-│   ├── backup.rs        # create/list/restore/prune
-│   ├── console.rs       # RCON command dispatch
-│   ├── webhook.rs       # URL config, test notification
-│   └── serve.rs         # Web server startup, log watcher, signal handling
+│   └── workshop.rs      # Steam Workshop API client (mod metadata)
 │
 ├── web/
-│   ├── mod.rs           # actix-web server setup, RustEmbed static files, route registration
+│   ├── mod.rs           # actix-web server setup, static files, route registration
 │   ├── state.rs         # AppState (shared DB, config, dirs, http client)
 │   └── handlers/
 │       ├── mod.rs       # Handler module declarations
@@ -59,19 +55,18 @@ src/
 │       ├── dashboard.rs # Server status, player count, recent logs
 │       ├── configs.rs   # INI/sandbox viewer and editor
 │       ├── mods.rs      # Mod list, add/remove, profiles
-│       ├── backups.rs   # Backup list and create
-│       ├── console.rs   # RCON console (HTMX partial responses)
-│       └── logs.rs      # Log tail viewer
+│       ├── backups.rs   # Backup create/restore/list
+│       ├── console.rs   # RCON web console
+│       └── logs.rs      # Log viewer
 │
-└── assets/
-    ├── style.css        # Dark theme CSS (embedded via RustEmbed)
-    └── htmx.min.js      # HTMX 2.0.3 (embedded via RustEmbed)
+├── logging/             # tracing-subscriber setup
+└── assets/              # Embedded CSS, HTMX JS (via rust-embed)
 
-templates/                # Askama HTML templates (compiled at build time)
-├── base.html            # Layout with nav bar
-├── login.html           # Standalone login page
-├── dashboard.html       # Server status dashboard
-├── config.html          # Config editor
+templates/               # Askama HTML templates
+├── base.html            # Layout with nav, HTMX script
+├── login.html           # Auth page
+├── dashboard.html       # Server overview
+├── config.html          # INI/sandbox editor
 ├── mods.html            # Mod manager
 ├── backups.html         # Backup manager
 ├── console.html         # RCON console
@@ -80,53 +75,51 @@ templates/                # Askama HTML templates (compiled at build time)
 migrations/
 └── 001_initial.sql      # SQLite schema (users, workshop_mods, mod_profiles,
                          #   backup_snapshots, player_sessions)
+
+Containerfile            # fedora-minimal:44 + steamcmd + PZ runtime deps
 ```
 
 ## Key Design Decisions
 
-### Single Binary
+### Container-Managed Server
 
-All static assets (CSS, HTMX JS) are embedded via `rust-embed` and templates are compiled via `askama`. The SQLite database uses the `bundled` feature. The result is a single binary with zero runtime dependencies.
+The PZ server runs inside a podman container (`safehouse-pz`) managed via the bollard crate (async podman/Docker API). This solves several problems:
 
-### Comment-Preserving Parsers
+- **PID 1 = Java process** — `ProjectZomboid64` runs as PID 1 in the container, so SIGTERM reaches it directly. No shell wrapper, no orphan processes.
+- **Environment isolation** — `LD_LIBRARY_PATH`, `PATH`, and JRE setup are baked into the container image `ENV` directives, replacing the fragile `start-server.sh` wrapper.
+- **Log capture** — container stdout/stderr is captured by podman and accessible via `podman logs` / bollard's log stream API.
+- **Clean lifecycle** — container create/start/stop/remove replaces PID file tracking, `flock`, and `/proc` probing.
 
-PZ server admins heavily annotate their `server.ini` and `SandboxVars.lua` files. The `IniEditor` and `SandboxEditor` operate on raw lines, preserving comments, blank lines, and formatting. Only the targeted key=value line is modified.
-
-### PID File Locking
-
-Server lifecycle uses `flock(LOCK_EX | LOCK_NB)` on the PID file to prevent concurrent starts. The lock is held by the safehouse process that spawned the server. If safehouse crashes, the lock is automatically released by the OS.
+The `-cachedir=/zomboid` flag tells PZ to use the volume-mounted data directory instead of Java's `user.home` (which defaults to `/root` inside the container).
 
 ### RCON for Graceful Shutdown
 
-`server stop` uses RCON (`save` → `quit`) rather than SIGTERM directly. This ensures the world is saved before shutdown. SIGTERM is the fallback if RCON is unavailable, with SIGKILL as the last resort after 40 seconds.
+`server stop` uses RCON `save` + `quit` for graceful world-saving shutdown. If RCON fails (server crashed, password wrong), safehouse falls back to `podman stop` which sends SIGTERM to PID 1.
 
-### Blocking RCON in Web Handlers
+### Comment-Preserving Parsers
 
-The `RconClient` uses `std::net::TcpStream` (blocking I/O). Web handlers wrap RCON calls in `actix_web::web::block()` to avoid blocking the tokio runtime's worker threads.
+`IniEditor` and `SandboxEditor` parse PZ config files line-by-line and preserve comments, blank lines, and ordering. This avoids stripping the extensive inline documentation PZ generates in `server.ini`.
 
 ### Session Security
 
-- Passwords: Argon2id (via the `argon2` crate)
-- Sessions: signed cookies with a 64-byte hex secret
-- Cookie `Secure` flag is `false` by default (safehouse runs on plain HTTP); set to `true` when behind a TLS reverse proxy
+Web UI sessions use a 64-byte random secret (auto-generated, stored in `safehouse.toml`) for cookie signing via `actix-session`. Passwords are hashed with Argon2id.
 
 ## Database Schema
 
-```
-users              — web UI authentication
-workshop_mods      — Steam Workshop metadata cache
-mod_profiles       — named mod collection presets (JSON arrays)
-backup_snapshots   — backup file records
-player_sessions    — player join/leave tracking
-```
+SQLite with bundled `libsqlite3` (no system dependency). Single migration:
 
-All tables use `datetime('now')` for timestamps and `INTEGER PRIMARY KEY AUTOINCREMENT` for IDs. The database runs in WAL mode with a 5-second busy timeout.
+- **users** — username, argon2 password hash
+- **workshop_mods** — cached mod metadata from Steam API
+- **mod_profiles** — named mod list snapshots
+- **backup_snapshots** — backup filename, size, timestamp
+- **player_sessions** — join/leave timestamps for Discord notifications
 
 ## Tech Stack
 
 | Component | Crate | Purpose |
 | ----------- | ------- | --------- |
 | CLI | clap 4 (derive) | Command parsing |
+| Container API | bollard 0.21 | Podman/Docker container management |
 | Web server | actix-web 4 | HTTP server |
 | Templates | askama 0.12 | Compile-time HTML templates |
 | Database | rusqlite 0.32 (bundled) | SQLite with bundled libsqlite3 |
@@ -138,4 +131,3 @@ All tables use `datetime('now')` for timestamps and `INTEGER PRIMARY KEY AUTOINC
 | Compression | flate2 + tar | Backup archives |
 | Interactivity | HTMX 2.0 | Web UI dynamic updates |
 | Logging | tracing + tracing-subscriber | Structured logging |
-| Locking | parking_lot 0.12 | Mutex/RwLock for shared state |

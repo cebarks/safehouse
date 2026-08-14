@@ -1,12 +1,14 @@
 # CLI Reference
 
-All commands support these global options:
+```bash
+safehouse [OPTIONS] <COMMAND>
+```
 
-```
---data-dir <PATH>    Override safehouse data directory
---config <PATH>      Override config file path
--v, --verbose        Increase log verbosity (-v = debug, -vv = trace)
-```
+| Global Option | Description |
+| --------------- | ------------- |
+| `--data-dir <PATH>` | Safehouse data directory (default: `~/.local/share/safehouse`) |
+| `--config <PATH>` | Config file path override |
+| `-v`, `--verbose` | Increase verbosity (`-v` debug, `-vv` trace) |
 
 ## setup
 
@@ -27,16 +29,25 @@ Creates `safehouse.toml` in the data directory with default settings. Downloads 
 
 ## server
 
-Manage the PZ server process.
-
 ### server start
 
 ```bash
 safehouse server start
-safehouse server start --timeout 120
+safehouse server start --timeout 180
 ```
 
-Spawns `ProjectZomboid64`, writes the PID file (with flock), and waits for RCON to become available. The `--timeout` flag (default: 60s) controls how long to wait before giving up.
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--timeout` | `60` | Seconds to wait for RCON readiness |
+
+Starts the PZ server inside a podman container (`safehouse-pz`). Before launch:
+
+1. Writes `RCONPassword` and `RCONPort` from `safehouse.toml` into `server.ini`
+2. Creates and starts the container with volume mounts and port bindings
+3. Passes `-cachedir=/zomboid -servername <name> -adminpassword <pass>` to PZ
+4. Polls RCON until the server responds or the timeout expires
+
+If the server container exits unexpectedly during startup, safehouse detects it and reports immediately rather than waiting for the full timeout.
 
 ### server stop
 
@@ -44,7 +55,13 @@ Spawns `ProjectZomboid64`, writes the PID file (with flock), and waits for RCON 
 safehouse server stop
 ```
 
-Graceful shutdown: sends RCON `save` → waits 3s → sends RCON `quit`. If RCON is unavailable, falls back to SIGTERM. Force-kills with SIGKILL after 40 seconds.
+Graceful shutdown sequence:
+
+1. Sends RCON `save` command (world save)
+2. Sends RCON `quit` command (graceful shutdown)
+3. Waits for the container to exit
+4. Falls back to `podman stop` (SIGTERM → PID 1) if RCON quit doesn't work
+5. Removes the stopped container
 
 ### server restart
 
@@ -52,7 +69,7 @@ Graceful shutdown: sends RCON `save` → waits 3s → sends RCON `quit`. If RCON
 safehouse server restart
 ```
 
-Equivalent to `stop` followed by `start`.
+Equivalent to `server stop` followed by `server start --timeout 60`.
 
 ### server status
 
@@ -60,7 +77,7 @@ Equivalent to `stop` followed by `start`.
 safehouse server status
 ```
 
-Shows: running/stopped state, PID, server name, install path, and connected players (via RCON).
+Shows whether the container is running, the server name, install directory, and (if running) the connected player count via RCON.
 
 ### server logs
 
@@ -75,11 +92,9 @@ safehouse server logs --follow
 | `--lines` | `100` | Number of lines to show |
 | `--follow`, `-f` | off | Tail the log continuously (Ctrl+C to stop) |
 
-Reads the most recent PZ log file (`~/Zomboid/server/<name>_*.txt`).
+Streams logs from the PZ server container via `podman logs`. Works for both running and recently-stopped containers.
 
 ## config
-
-Edit PZ server configuration files. Safehouse preserves comments and blank lines when modifying files.
 
 ### config show
 
@@ -87,17 +102,16 @@ Edit PZ server configuration files. Safehouse preserves comments and blank lines
 safehouse config show
 ```
 
-Prints the full contents of `server.ini`.
+Prints the full `server.ini` contents.
 
 ### config set
 
 ```bash
 safehouse config set MaxPlayers 32
-safehouse config set PVP true
-safehouse config set ServerWelcomeMessage "Welcome to the server!"
+safehouse config set PVP false
 ```
 
-Sets a key in `server.ini`. Shows the old and new value.
+Sets a key in `server.ini`. Comment-preserving — existing comments are not stripped.
 
 ### config sandbox show
 
@@ -105,17 +119,16 @@ Sets a key in `server.ini`. Shows the old and new value.
 safehouse config sandbox show
 ```
 
-Prints the full contents of `SandboxVars.lua`.
+Prints the full `SandboxVars.lua` contents.
 
 ### config sandbox set
 
 ```bash
-safehouse config sandbox set ZombieCount 5
-safehouse config sandbox set Zombies.Speed 3
-safehouse config sandbox set Zombies.Strength 2
+safehouse config sandbox set ZombieLore.Speed 3
+safehouse config sandbox set Zombies.Distribution "Urban Focused"
 ```
 
-Sets a value in `SandboxVars.lua`. Supports dotted keys for nested tables (e.g., `Zombies.Speed`).
+Sets a key in `SandboxVars.lua`. Supports dotted keys for nested Lua tables.
 
 ### config preset list
 
@@ -123,27 +136,21 @@ Sets a value in `SandboxVars.lua`. Supports dotted keys for nested tables (e.g.,
 safehouse config preset list
 ```
 
-Lists saved configuration presets.
-
 ### config preset save
 
 ```bash
-safehouse config preset save vanilla
+safehouse config preset save vanilla-plus
 ```
-
-Saves the current mod list from `server.ini` as a named preset.
 
 ### config preset apply
 
 ```bash
-safehouse config preset apply vanilla
+safehouse config preset apply vanilla-plus
 ```
 
-Applies a saved preset to `server.ini`. Requires a server restart to take effect.
+Applies a saved preset. Requires the server to be stopped — restart after applying.
 
 ## mods
-
-Manage Steam Workshop mods. PZ requires two identifiers per mod: the Workshop ID (numeric) and the mod's internal folder name.
 
 ### mods list
 
@@ -151,32 +158,28 @@ Manage Steam Workshop mods. PZ requires two identifiers per mod: the Workshop ID
 safehouse mods list
 ```
 
-Lists all mods from `server.ini` with Workshop IDs, folder names, and cached titles.
-
 ### mods add
 
 ```bash
-safehouse mods add 2392987220 BritasWeaponPack
-safehouse mods add 2169435993 Arsenal26
+safehouse mods add 2313387159
+safehouse mods add 2313387159 --name "Brita's Weapon Pack"
 ```
 
-Adds a mod to both `WorkshopItems=` and `Mods=` lines in `server.ini`. Fetches and caches metadata from the Steam Workshop API. Requires a server restart to load.
+Adds a Workshop mod by ID. Updates both `WorkshopItems` and `Mods` in `server.ini`.
 
 ### mods remove
 
 ```bash
-safehouse mods remove 2392987220
+safehouse mods remove 2313387159
 ```
-
-Removes a mod from both lists in `server.ini` by Workshop ID.
 
 ### mods info
 
 ```bash
-safehouse mods info 2392987220
+safehouse mods info 2313387159
 ```
 
-Fetches and displays Workshop metadata (title, author, description preview) from the Steam API.
+Fetches mod metadata from the Steam Workshop API.
 
 ### mods profile list
 
@@ -184,27 +187,21 @@ Fetches and displays Workshop metadata (title, author, description preview) from
 safehouse mods profile list
 ```
 
-Lists saved mod collection profiles.
-
 ### mods profile save
 
 ```bash
-safehouse mods profile save "heavy-mods"
+safehouse mods profile save vanilla-plus
 ```
-
-Saves the current mod list from `server.ini` as a named profile.
 
 ### mods profile load
 
 ```bash
-safehouse mods profile load "heavy-mods"
+safehouse mods profile load vanilla-plus
 ```
 
-Replaces the mod list in `server.ini` with the saved profile. Restart the server to apply.
+Loads a saved mod profile, replacing the current mod list. Restart the server after loading.
 
 ## backup
-
-Manage world save backups. Snapshots are `.tar.gz` archives of the world save directory.
 
 ### backup create
 
@@ -213,7 +210,7 @@ safehouse backup create
 safehouse backup create --label "before-mods"
 ```
 
-Creates a timestamped `.tar.gz` snapshot. If `backup_rcon_save` is enabled (default), sends an RCON `save` command before archiving. Uses atomic rename (temp file → final name) to prevent partial archives.
+Creates a `.tar.gz` snapshot of the world save directory. If the server is running and `backup_rcon_save` is enabled, sends an RCON save command first.
 
 ### backup list
 
@@ -221,28 +218,24 @@ Creates a timestamped `.tar.gz` snapshot. If `backup_rcon_save` is enabled (defa
 safehouse backup list
 ```
 
-Lists available snapshots sorted newest first, with file sizes.
-
 ### backup restore
 
 ```bash
-safehouse backup restore servertest_20250728_143022.tar.gz
+safehouse backup restore servertest_20250728_143022_before-mods.tar.gz
 ```
 
-Extracts a snapshot into the world save directory. Automatically stops the server first if it's running.
+Restores a backup. The server must be stopped first.
 
 ### backup prune
 
 ```bash
 safehouse backup prune
-safehouse backup prune --min-keep 5
+safehouse backup prune --days 3
 ```
 
-Deletes snapshots older than `backup_retention_days` (from config), keeping at least `--min-keep` (default: 2) snapshots regardless of age.
+Removes backups older than the configured retention period.
 
 ## console
-
-Send RCON admin commands to a running PZ server.
 
 ### console players
 
@@ -250,35 +243,29 @@ Send RCON admin commands to a running PZ server.
 safehouse console players
 ```
 
-Lists currently connected players.
-
 ### console chat
 
 ```bash
-safehouse console chat "Server restarting in 5 minutes!"
+safehouse console chat "Server restarting in 5 minutes"
 ```
-
-Broadcasts a message to all connected players.
 
 ### console kick
 
 ```bash
-safehouse console kick "PlayerName"
+safehouse console kick PlayerName
 ```
 
 ### console ban
 
 ```bash
-safehouse console ban "PlayerName"
+safehouse console ban PlayerName
 ```
 
 ### console give
 
 ```bash
-safehouse console give "PlayerName" "Base.Axe"
+safehouse console give PlayerName Base.Axe
 ```
-
-Gives an item to a player using PZ's internal item name.
 
 ### console save
 
@@ -286,26 +273,19 @@ Gives an item to a player using PZ's internal item name.
 safehouse console save
 ```
 
-Triggers an in-game world save.
-
 ## webhook
 
-Configure Discord webhook notifications.
-
 ```bash
-# Set the webhook URL
-safehouse webhook --url "https://discord.com/api/webhooks/123/abc"
-
-# Set URL and send a test notification
-safehouse webhook --url "https://discord.com/api/webhooks/123/abc" --test
-
-# Test the currently configured webhook
+safehouse webhook --url "https://discord.com/api/webhooks/..."
 safehouse webhook --test
 ```
 
-## serve
+| Option | Description |
+|--------|-------------|
+| `--url <URL>` | Set the Discord webhook URL |
+| `--test` | Send a test notification |
 
-Start the embedded web management UI.
+## serve
 
 ```bash
 safehouse serve
@@ -314,7 +294,9 @@ safehouse serve --bind 127.0.0.1 --port 8080
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--bind` | from config (`0.0.0.0`) | Listen address |
-| `--port` | from config (`9292`) | Listen port |
+| `--bind` | from config | Override bind address |
+| `--port` | from config | Override port |
 
-On first run, prompts for an admin password (hashed with Argon2id). The web UI includes a background log watcher that sends Discord notifications for player events. Handles SIGINT/SIGTERM for graceful shutdown.
+Starts the web management UI. On first run, prompts for an admin password. Auto-generates a session secret if not already set.
+
+The web server also runs a background log watcher for Discord notifications (player join/leave events).

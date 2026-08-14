@@ -1,94 +1,65 @@
 # Web UI
 
-Safehouse includes an embedded web dashboard built with actix-web and HTMX. All assets (CSS, JavaScript) are compiled into the binary — no external files needed at runtime.
+The safehouse web UI is an embedded HTMX dashboard served by actix-web. All static assets (CSS, JS) are compiled into the binary — no external CDN or build step required.
 
 ## Starting the Web UI
 
 ```bash
 safehouse serve
+safehouse serve --bind 127.0.0.1 --port 8080
 ```
 
-On first run, you'll be prompted to set an admin password:
+On first run, you'll be prompted to set an admin password. The web UI is then available at `http://localhost:9292` (default).
 
-```
-Set admin password: ********
-Admin user created.
-Safehouse starting on http://0.0.0.0:9292
-```
-
-Navigate to `http://your-server:9292` and log in with username `admin` and the password you set.
+The `serve` command also starts a background log watcher for Discord notifications (see below).
 
 ## Pages
 
 ### Dashboard (`/`)
 
-Shows at a glance:
-
-- **Server status** — running (green) or stopped (red) indicator
-- **Server name** — from `safehouse.toml`
-- **Connected players** — live count via RCON (when server is running)
-- **Recent log lines** — last 20 lines from the PZ server log
+Server overview: running status, player count, server name, uptime. Data is fetched via RCON when the server is running.
 
 ### Config (`/config`)
 
-Displays the full contents of `server.ini` and `SandboxVars.lua`. Provides forms to set individual keys:
+View and edit `server.ini` and `SandboxVars.lua` through the browser. Changes are written with the comment-preserving editor — existing comments and formatting are retained.
 
-- **server.ini** — flat `Key=Value` pairs (e.g., `MaxPlayers`, `PVP`)
-- **SandboxVars.lua** — supports dotted keys for nested tables (e.g., `Zombies.Speed`)
-
-Changes are written to disk immediately. Restart the server to apply most settings.
+Restart the server after changing config values.
 
 ### Mods (`/mods`)
 
-- **Add mod** — enter a Workshop ID and mod folder name
-- **Mod list** — shows all installed mods with Workshop ID, folder name, and cached title
-- **Remove** — removes a mod from `server.ini`
-- **Profiles** — lists saved mod collection profiles
-
-Metadata is fetched from the Steam Workshop API and cached in the database.
+Add, remove, and list Steam Workshop mods. Shows cached mod metadata (name, description) from the Steam API. Supports mod profiles for quick switching between mod sets.
 
 ### Backups (`/backups`)
 
-- **Create backup** — creates a `.tar.gz` snapshot with an optional label
-- **Snapshot list** — shows all backups with filename and size
+Create, list, and restore world backups. Shows file size and timestamp for each snapshot.
 
 ### Console (`/console`)
 
-An interactive RCON console. Type a command, click Send, and see the response inline (powered by HTMX — no page reload).
-
-Common commands: `players`, `servermsg "text"`, `kickuser "name"`, `save`.
+Send RCON commands to the running server: chat, kick, ban, give items, save. Shows command output.
 
 ### Logs (`/logs`)
 
-Displays the last 200 lines from the most recent PZ server log file.
+View recent PZ server log output.
 
 ## Authentication
 
-- Sessions use signed cookies (actix-session with CookieSessionStore)
-- The session secret is a 64-byte hex string, auto-generated on first `serve` and stored in `safehouse.toml`
-- Session TTL is 7 days
-- Passwords are hashed with Argon2id
-- All pages except `/login` require authentication — unauthenticated requests redirect to `/login`
+The web UI uses cookie-based sessions with a 64-byte signed secret. Passwords are hashed with Argon2id.
+
+- Session secret is auto-generated on first `safehouse serve` and saved to `safehouse.toml`
+- Default bind is `0.0.0.0` — use a reverse proxy with TLS for production (see [Deployment](deployment.md))
+- Only one admin user is created; multi-user support is not implemented
 
 ## Background Log Watcher
 
-When `serve` is running, a background task monitors the PZ server log:
+When `safehouse serve` is running, a background task tails the PZ server log every 2 seconds and parses player connect/disconnect events. These trigger Discord webhook notifications if configured.
 
-- Checks for new log lines every 2 seconds
-- Parses player connect/disconnect events
-- Sends Discord notifications (if a webhook URL is configured)
-- Handles log file rotation (resets position when PZ creates a new log file)
+The watcher handles log file rotation — when PZ creates a new log file after a restart, it resets to the current end of the new file to avoid replaying old events.
 
 ## Customization
 
-The web UI uses a dark theme with these CSS classes available for customization:
-
-| Class | Element |
-| ------- | --------- |
-| `.nav` | Top navigation bar |
-| `.status-card.running` | Green-bordered status card |
-| `.status-card.stopped` | Red-bordered status card |
-| `.btn-primary` | Primary action buttons (red accent) |
-| `.btn-danger` | Destructive action buttons |
-
-To customize styles, modify `src/assets/style.css` and rebuild. The CSS is embedded in the binary at compile time via `rust-embed`.
+| Setting | How to change |
+| --------- | --------------- |
+| Port | `--port` flag or `web_port` in `safehouse.toml` |
+| Bind address | `--bind` flag or `web_bind` in `safehouse.toml` |
+| Admin password | Delete `safehouse.db` and restart `serve` to re-create |
+| TLS | Use a reverse proxy (nginx, caddy) — see [Deployment](deployment.md) |
