@@ -3,6 +3,7 @@
 pub mod backup;
 pub mod cli;
 pub mod config;
+pub mod container;
 pub mod db;
 pub mod dirs;
 pub mod logging;
