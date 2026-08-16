@@ -2,7 +2,7 @@ use actix_session::Session;
 use actix_web::{get, web, HttpResponse, Responder};
 use askama::Template;
 
-use crate::pz::detect::is_server_running;
+use crate::container;
 use crate::web::handlers::auth::require_auth;
 use crate::web::state::AppState;
 
@@ -30,7 +30,7 @@ pub async fn dashboard(session: Session, state: web::Data<AppState>) -> impl Res
         )
     };
 
-    let running = is_server_running(&state.dirs.pid_file());
+    let running = container::is_running(&state.docker).await;
 
     let player_count = if running {
         // Use web::block to avoid blocking the tokio worker thread —

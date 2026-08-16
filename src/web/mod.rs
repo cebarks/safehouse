@@ -46,6 +46,7 @@ pub async fn run_server(
     config: SafehouseConfig,
     dirs: SafehouseDirs,
     db: Database,
+    docker: bollard::Docker,
 ) -> Result<actix_web::dev::ServerHandle> {
     let key_bytes = config.session_key_bytes();
     let session_key = Key::from(&key_bytes);
@@ -54,6 +55,7 @@ pub async fn run_server(
         config: Arc::new(RwLock::new(config)),
         dirs: Arc::new(dirs),
         http: reqwest::Client::new(),
+        docker: Arc::new(docker),
     });
 
     let addr = format!("{bind}:{port}");

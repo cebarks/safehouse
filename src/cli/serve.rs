@@ -36,8 +36,11 @@ pub async fn run(bind: Option<&str>, port: Option<u16>, cli: &super::Cli) -> Res
     let log_watcher_config = config.clone();
     let log_watcher_dirs = dirs.clone();
 
+    // Connect to podman/docker for container status queries
+    let docker = crate::container::connect().await?;
+
     // Start web server (returns a handle for graceful shutdown)
-    let server_handle = crate::web::run_server(&web_bind, web_port, config, dirs, db).await?;
+    let server_handle = crate::web::run_server(&web_bind, web_port, config, dirs, db, docker).await?;
 
     // Spawn background log watcher for Discord notifications
     let http_client = reqwest::Client::new();

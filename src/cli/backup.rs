@@ -80,8 +80,9 @@ async fn restore(ctx: &CliContext, filename: &str) -> Result<()> {
     if !snap_path.exists() {
         bail!("Backup not found: {filename}");
     }
-    // Ensure server is stopped first
-    if crate::pz::detect::is_server_running(&ctx.dirs.pid_file()) {
+    // Ensure server is stopped first — check the container, not the (defunct) PID file
+    let docker = crate::container::connect().await?;
+    if crate::container::is_running(&docker).await {
         println!("Stopping server before restore...");
         crate::cli::server::stop(ctx).await?;
     }

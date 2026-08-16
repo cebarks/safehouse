@@ -12,4 +12,5 @@ pub struct AppState {
     pub config: Arc<RwLock<SafehouseConfig>>,
     pub dirs: Arc<SafehouseDirs>,
     pub http: reqwest::Client,
+    pub docker: Arc<bollard::Docker>,
 }
