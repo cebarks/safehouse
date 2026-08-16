@@ -54,6 +54,21 @@ pub async fn config_set(
     if let Some(r) = require_auth(&session) {
         return r;
     }
+    // Validate before touching disk. server.ini and SandboxVars.lua are
+    // line-oriented / Lua-interpreted files — an unvalidated key or value
+    // could inject an unrelated key (e.g. RCONPassword) or, for the
+    // sandbox file, arbitrary Lua that PZ executes at boot.
+    let validation = match form.file.as_str() {
+        "ini" => crate::validate::validate_ini_key(&form.key)
+            .and_then(|()| crate::validate::validate_ini_value(&form.value)),
+        "sandbox" => crate::validate::validate_lua_key(&form.key)
+            .and_then(|()| crate::validate::validate_lua_value(&form.value)),
+        _ => Err(anyhow::anyhow!("unknown file")),
+    };
+    if let Err(e) = validation {
+        return HttpResponse::BadRequest().body(e.to_string());
+    }
+
     let cfg = state.config.read();
     let result = match form.file.as_str() {
         "ini" => {

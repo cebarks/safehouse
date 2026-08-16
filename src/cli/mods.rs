@@ -46,7 +46,7 @@ fn list(ctx: &CliContext) -> Result<()> {
 async fn add(ctx: &CliContext, workshop_id: &str, mod_name: &str) -> Result<()> {
     let ini_path = ctx.dirs.server_ini(&ctx.config);
     let mut ini = IniEditor::load(&ini_path)?;
-    add_mod_to_ini(&mut ini, workshop_id, mod_name);
+    add_mod_to_ini(&mut ini, workshop_id, mod_name)?;
     ini.save(&ini_path)?;
 
     // Fetch and cache metadata — best effort

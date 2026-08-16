@@ -1,9 +1,20 @@
+use anyhow::Result;
+
 use crate::pz::ini::IniEditor;
+use crate::validate::{validate_mod_folder_name, validate_workshop_id};
 
 /// Add a mod to both WorkshopItems= and Mods= lines. Idempotent.
-pub fn add_mod_to_ini(ini: &mut IniEditor, workshop_id: &str, mod_folder_name: &str) {
+///
+/// Both fields are validated first: they're joined with `;` and written
+/// into a `key=value` line in `server.ini`, so an unvalidated ID or folder
+/// name could inject an extra `;`-separated entry, corrupt the line with a
+/// stray `=`, or smuggle an unrelated key via an embedded newline.
+pub fn add_mod_to_ini(ini: &mut IniEditor, workshop_id: &str, mod_folder_name: &str) -> Result<()> {
+    validate_workshop_id(workshop_id)?;
+    validate_mod_folder_name(mod_folder_name)?;
     ini.add_workshop_id(workshop_id);
     ini.add_mod_name(mod_folder_name);
+    Ok(())
 }
 
 /// Remove a mod from both lists.
@@ -30,7 +41,7 @@ mod tests {
     fn test_add_mod_updates_both_lists() {
         let content = "WorkshopItems=\nMods=\n";
         let mut ini = IniEditor::parse(content);
-        add_mod_to_ini(&mut ini, "2392987220", "BritasWeaponPack");
+        add_mod_to_ini(&mut ini, "2392987220", "BritasWeaponPack").unwrap();
         assert!(ini.workshop_ids().contains(&"2392987220".to_string()));
         assert!(ini.mod_names().contains(&"BritasWeaponPack".to_string()));
     }
@@ -48,8 +59,22 @@ mod tests {
     fn test_no_duplicate_add() {
         let content = "WorkshopItems=2392987220\nMods=BritasWeaponPack\n";
         let mut ini = IniEditor::parse(content);
-        add_mod_to_ini(&mut ini, "2392987220", "BritasWeaponPack");
+        add_mod_to_ini(&mut ini, "2392987220", "BritasWeaponPack").unwrap();
         assert_eq!(ini.workshop_ids().len(), 1);
+    }
+
+    #[test]
+    fn test_add_mod_rejects_invalid_workshop_id() {
+        let mut ini = IniEditor::parse("WorkshopItems=\nMods=\n");
+        assert!(add_mod_to_ini(&mut ini, "123;RCONPassword=hacked", "Mod").is_err());
+        assert!(ini.workshop_ids().is_empty());
+    }
+
+    #[test]
+    fn test_add_mod_rejects_invalid_folder_name() {
+        let mut ini = IniEditor::parse("WorkshopItems=\nMods=\n");
+        assert!(add_mod_to_ini(&mut ini, "123", "Evil\nRCONPassword=hacked").is_err());
+        assert!(ini.mod_names().is_empty());
     }
 
     #[test]

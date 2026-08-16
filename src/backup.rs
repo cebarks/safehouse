@@ -5,14 +5,23 @@ use chrono::Utc;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+use crate::validate::validate_backup_label;
+
 /// Create a .tar.gz snapshot of `source_dir` into `dest_dir`.
 /// Returns the path of the created archive.
+///
+/// `label` is validated first: it's interpolated directly into the output
+/// filename, so an unvalidated label containing `/` or `..` could write the
+/// archive outside `dest_dir` (e.g. a label of `../../etc/cron.d/x`).
 pub fn create_snapshot(
     source_dir: &Path,
     dest_dir: &Path,
     server_name: &str,
     label: Option<&str>,
 ) -> Result<PathBuf> {
+    if let Some(l) = label {
+        validate_backup_label(l)?;
+    }
     std::fs::create_dir_all(dest_dir)?;
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
     let label_part = label.map(|l| format!("_{l}")).unwrap_or_default();

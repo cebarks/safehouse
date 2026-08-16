@@ -70,9 +70,16 @@ pub async fn mods_add(
     let cfg = state.config.read();
     let ini_path = state.dirs.server_ini(&cfg);
     drop(cfg);
-    if let Ok(mut ini) = IniEditor::load(&ini_path) {
-        add_mod_to_ini(&mut ini, &form.workshop_id, &form.mod_name);
-        let _ = ini.save(&ini_path);
+    match IniEditor::load(&ini_path) {
+        Ok(mut ini) => match add_mod_to_ini(&mut ini, &form.workshop_id, &form.mod_name) {
+            Ok(()) => {
+                if let Err(e) = ini.save(&ini_path) {
+                    return HttpResponse::InternalServerError().body(e.to_string());
+                }
+            }
+            Err(e) => return HttpResponse::BadRequest().body(e.to_string()),
+        },
+        Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
     }
     // Fetch metadata best-effort
     if let Ok(info) = fetch_mod_info(&state.http, &form.workshop_id).await {

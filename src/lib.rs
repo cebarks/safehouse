@@ -10,4 +10,5 @@ pub mod logging;
 pub mod notify;
 pub mod pz;
 pub mod steam;
+pub mod validate;
 pub mod web;

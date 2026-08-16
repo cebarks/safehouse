@@ -59,6 +59,11 @@ pub async fn backup_create(
         return r;
     }
     let label = form.into_inner().label.filter(|s| !s.is_empty());
+    if let Some(l) = &label {
+        if let Err(e) = crate::validate::validate_backup_label(l) {
+            return HttpResponse::BadRequest().body(e.to_string());
+        }
+    }
     let (saves_dir, backup_dir, server_name) = {
         let cfg = state.config.read();
         (
