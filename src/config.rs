@@ -98,9 +98,7 @@ impl SafehouseConfig {
         if let Some(ref raw) = cfg.steam_collection_id {
             match crate::steam::parse_collection_id(raw) {
                 Ok(id) => cfg.steam_collection_id = Some(id),
-                Err(e) => anyhow::bail!(
-                    "invalid steam_collection_id in config: {e}"
-                ),
+                Err(e) => anyhow::bail!("invalid steam_collection_id in config: {e}"),
             }
         }
         Ok(cfg)

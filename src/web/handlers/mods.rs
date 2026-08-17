@@ -4,8 +4,8 @@ use askama::Template;
 use serde::Deserialize;
 
 use crate::pz::ini::IniEditor;
-use crate::pz::mods::{add_mod_to_ini, list_mods, remove_mod_from_ini, scan_workshop_mod_folders, sync_mods_to_collection};
-use crate::steam::{fetch_collection_items, fetch_mod_info, fetch_mod_info_batch, parse_collection_id};
+use crate::pz::mods::{add_mod_to_ini, execute_collection_sync, list_mods, remove_mod_from_ini};
+use crate::steam::{fetch_mod_info, parse_collection_id};
 use crate::web::handlers::auth::require_auth;
 use crate::web::state::AppState;
 
@@ -127,6 +127,7 @@ pub struct SyncForm {
     collection: Option<String>,
 }
 
+#[allow(clippy::await_holding_lock)] // parking_lot::Mutex is safe across awaits; admin-only endpoint
 #[post("/mods/sync")]
 pub async fn mods_sync(
     form: web::Form<SyncForm>,
@@ -161,47 +162,21 @@ pub async fn mods_sync(
         Err(e) => return HttpResponse::BadRequest().body(e.to_string()),
     };
 
-    // Fetch collection items
-    let workshop_ids = match fetch_collection_items(&state.http, &collection_id).await {
-        Ok(ids) => ids,
-        Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
-    };
-    if workshop_ids.is_empty() {
-        return HttpResponse::BadRequest().body("Collection is empty or not public.");
-    }
-
-    // Fetch metadata
-    if let Ok(infos) = fetch_mod_info_batch(&state.http, &workshop_ids).await {
+    let result = {
         let db = state.db.lock();
-        for info in &infos {
-            let _ = db.upsert_workshop_mod(info, None);
+        match execute_collection_sync(
+            &state.http,
+            &db,
+            &collection_id,
+            &install_dir,
+            &ini_path,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
         }
-    }
-
-    // Scan for folder names
-    let mut known_folders = scan_workshop_mod_folders(&install_dir);
-    {
-        let db = state.db.lock();
-        for id in &workshop_ids {
-            if !known_folders.contains_key(id.as_str()) {
-                if let Ok(Some(cached)) = db.get_cached_mod(id) {
-                    if let Some(folder) = cached.mod_folder_name {
-                        known_folders.insert(id.clone(), vec![folder]);
-                    }
-                }
-            }
-        }
-    }
-
-    // Sync
-    let mut ini = match IniEditor::load(&ini_path) {
-        Ok(ini) => ini,
-        Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
     };
-    let result = sync_mods_to_collection(&mut ini, &workshop_ids, &known_folders);
-    if let Err(e) = ini.save(&ini_path) {
-        return HttpResponse::InternalServerError().body(e.to_string());
-    }
 
     HttpResponse::Found()
         .insert_header((

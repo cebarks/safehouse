@@ -65,7 +65,12 @@ pub fn scan_workshop_mod_folders(install_dir: &Path) -> HashMap<String, Vec<Stri
             for mod_entry in mod_entries.flatten() {
                 let mod_info_path = mod_entry.path().join("mod.info");
                 if let Some(mod_id) = parse_mod_info_id(&mod_info_path) {
-                    map.entry(workshop_id.clone()).or_default().push(mod_id);
+                    // Validate before trusting — a malicious mod.info
+                    // could contain "Evil;RCONPassword=hacked" which
+                    // would corrupt server.ini if written unvalidated.
+                    if validate_mod_folder_name(&mod_id).is_ok() {
+                        map.entry(workshop_id.clone()).or_default().push(mod_id);
+                    }
                 }
             }
         }
@@ -86,6 +91,64 @@ fn parse_mod_info_id(path: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Execute the full collection sync workflow:
+///   1. Fetch collection items from Steam API
+///   2. Batch-fetch and cache metadata
+///   3. Scan downloaded mods for folder names + augment from DB cache
+///   4. Sync server.ini
+///   5. Update DB folder mappings for newly discovered mods
+///
+/// Shared by the CLI and web handlers to avoid duplicating orchestration.
+pub async fn execute_collection_sync(
+    http: &reqwest::Client,
+    db: &crate::db::Database,
+    collection_id: &str,
+    install_dir: &Path,
+    ini_path: &Path,
+) -> Result<SyncResult> {
+    use crate::steam::{fetch_collection_items, fetch_mod_info_batch};
+
+    // 1. Fetch collection items
+    let workshop_ids = fetch_collection_items(http, collection_id).await?;
+    if workshop_ids.is_empty() {
+        anyhow::bail!("Collection {collection_id} is empty or not public.");
+    }
+
+    // 2. Fetch metadata (batch) and cache in DB
+    let infos = fetch_mod_info_batch(http, &workshop_ids).await?;
+    for info in &infos {
+        let _ = db.upsert_workshop_mod(info, None);
+    }
+
+    // 3. Scan downloaded workshop mods for folder names
+    let mut known_folders = scan_workshop_mod_folders(install_dir);
+
+    // Augment from DB cache for items not yet on disk
+    for id in &workshop_ids {
+        if !known_folders.contains_key(id.as_str()) {
+            if let Ok(Some(cached)) = db.get_cached_mod(id) {
+                if let Some(folder) = cached.mod_folder_name {
+                    known_folders.insert(id.clone(), vec![folder]);
+                }
+            }
+        }
+    }
+
+    // 4. Sync server.ini
+    let mut ini = IniEditor::load(ini_path)?;
+    let result = sync_mods_to_collection(&mut ini, &workshop_ids, &known_folders);
+    ini.save(ini_path)?;
+
+    // 5. Update DB folder mappings for newly discovered mods
+    for (id, folders) in &result.added {
+        if let Some(info) = infos.iter().find(|i| &i.workshop_id == id) {
+            let _ = db.upsert_workshop_mod(info, folders.first().map(|s| s.as_str()));
+        }
+    }
+
+    Ok(result)
 }
 
 /// Result of a collection sync operation.
@@ -297,7 +360,10 @@ mod tests {
         let mut ini = IniEditor::parse("WorkshopItems=\nMods=\n");
         let collection = vec!["111".to_string()];
         let mut known = HashMap::new();
-        known.insert("111".to_string(), vec!["SubModA".to_string(), "SubModB".to_string()]);
+        known.insert(
+            "111".to_string(),
+            vec!["SubModA".to_string(), "SubModB".to_string()],
+        );
         let result = sync_mods_to_collection(&mut ini, &collection, &known);
         assert_eq!(result.added.len(), 1);
         assert_eq!(result.added[0].1, vec!["SubModA", "SubModB"]);
@@ -323,7 +389,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("mod.info");
         std::fs::write(&path, "name=Brita's Weapon Pack\nid=BritasWeaponPack\n").unwrap();
-        assert_eq!(parse_mod_info_id(&path), Some("BritasWeaponPack".to_string()));
+        assert_eq!(
+            parse_mod_info_id(&path),
+            Some("BritasWeaponPack".to_string())
+        );
     }
 
     #[test]
@@ -361,7 +430,8 @@ mod tests {
     #[test]
     fn test_scan_workshop_mod_folders_discovers_mods() {
         let tmp = tempfile::tempdir().unwrap();
-        let mod_dir = tmp.path()
+        let mod_dir = tmp
+            .path()
             .join("steamapps/workshop/content/108600/12345/mods/TestMod");
         std::fs::create_dir_all(&mod_dir).unwrap();
         std::fs::write(mod_dir.join("mod.info"), "id=TestMod\n").unwrap();

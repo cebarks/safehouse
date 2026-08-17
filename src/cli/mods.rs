@@ -3,8 +3,8 @@ use anyhow::Result;
 use super::common::CliContext;
 use super::{ModAction, ProfileAction};
 use crate::pz::ini::IniEditor;
-use crate::pz::mods::{add_mod_to_ini, list_mods, remove_mod_from_ini, scan_workshop_mod_folders, sync_mods_to_collection};
-use crate::steam::{fetch_collection_items, fetch_mod_info, fetch_mod_info_batch, parse_collection_id};
+use crate::pz::mods::{add_mod_to_ini, execute_collection_sync, list_mods, remove_mod_from_ini};
+use crate::steam::{fetch_mod_info, parse_collection_id};
 
 pub async fn run(action: &ModAction, ctx: &CliContext) -> Result<()> {
     match action {
@@ -111,56 +111,27 @@ async fn sync(ctx: &CliContext, collection_arg: Option<&str>) -> Result<()> {
     let collection_id = parse_collection_id(&raw)?;
     println!("Fetching collection {collection_id}...");
 
-    // 1. Fetch collection items
-    let workshop_ids = fetch_collection_items(&ctx.http, &collection_id).await?;
-    if workshop_ids.is_empty() {
-        anyhow::bail!("Collection {collection_id} is empty or not public.");
-    }
-    println!("Collection contains {} workshop items.", workshop_ids.len());
-
-    // 2. Fetch metadata for all items (batch)
-    let infos = fetch_mod_info_batch(&ctx.http, &workshop_ids).await?;
-    // Cache metadata in DB
-    for info in &infos {
-        let _ = ctx.db.upsert_workshop_mod(info, None);
-    }
-
-    // 3. Scan downloaded workshop mods for folder names
-    let mut known_folders = scan_workshop_mod_folders(&ctx.config.server_install_dir);
-
-    // Also pull folder names from the DB cache for items not on disk
-    for id in &workshop_ids {
-        if !known_folders.contains_key(id.as_str()) {
-            if let Ok(Some(cached)) = ctx.db.get_cached_mod(id) {
-                if let Some(folder) = cached.mod_folder_name {
-                    known_folders.insert(id.clone(), vec![folder]);
-                }
-            }
-        }
-    }
-
-    // 4. Sync server.ini
     let ini_path = ctx.dirs.server_ini(&ctx.config);
-    let mut ini = IniEditor::load(&ini_path)?;
-    let result = sync_mods_to_collection(&mut ini, &workshop_ids, &known_folders);
-    ini.save(&ini_path)?;
+    let result = execute_collection_sync(
+        &ctx.http,
+        &ctx.db,
+        &collection_id,
+        &ctx.config.server_install_dir,
+        &ini_path,
+    )
+    .await?;
 
-    // 5. Update DB folder mappings for newly discovered mods
-    for (id, folders) in &result.added {
-        if let Some(info) = infos.iter().find(|i| &i.workshop_id == id) {
-            let _ = ctx.db.upsert_workshop_mod(info, folders.first().map(|s| s.as_str()));
-        }
-    }
-
-    // 6. Report results
+    // Report results
     if !result.added.is_empty() {
         println!("\nAdded ({}):", result.added.len());
         for (id, folders) in &result.added {
-            let title = infos
-                .iter()
-                .find(|i| &i.workshop_id == id)
-                .map(|i| i.title.as_str())
-                .unwrap_or("?");
+            let title = ctx
+                .db
+                .get_cached_mod(id)
+                .ok()
+                .flatten()
+                .map(|m| m.title)
+                .unwrap_or_else(|| "?".to_string());
             println!("  + {id} — {title} ({})", folders.join(", "));
         }
     }
@@ -176,11 +147,13 @@ async fn sync(ctx: &CliContext, collection_arg: Option<&str>) -> Result<()> {
             result.pending.len()
         );
         for id in &result.pending {
-            let title = infos
-                .iter()
-                .find(|i| &i.workshop_id == id)
-                .map(|i| i.title.as_str())
-                .unwrap_or("?");
+            let title = ctx
+                .db
+                .get_cached_mod(id)
+                .ok()
+                .flatten()
+                .map(|m| m.title)
+                .unwrap_or_else(|| "?".to_string());
             println!("  ? {id} — {title}");
         }
         println!("  Run `safehouse mods sync` again after the server downloads them.");
