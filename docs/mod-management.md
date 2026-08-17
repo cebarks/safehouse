@@ -12,6 +12,41 @@ Mods=BritasWeaponPack;Arsenal26;tsarslib
 
 Safehouse manages both lists together so they stay in sync.
 
+## Syncing from a Steam Collection
+
+The easiest way to manage mods is to curate a Steam Workshop collection and sync from it:
+
+```bash
+# Sync by collection ID
+safehouse mods sync 3264403312
+
+# Sync from a full Steam URL
+safehouse mods sync "https://steamcommunity.com/sharedfiles/filedetails/?id=3264403312"
+
+# Or set the collection in safehouse.toml and just run:
+safehouse mods sync
+```
+
+This:
+
+1. Fetches all workshop items from the collection
+2. Adds new mods and removes any not in the collection
+3. Scans downloaded mod directories for folder names (`mod.info` files)
+4. Updates both `WorkshopItems=` and `Mods=` in `server.ini`
+5. Caches mod metadata (titles, authors) in the database
+
+Mods not yet downloaded are added to `WorkshopItems=` so SteamCMD downloads them on the next server start. Run `safehouse mods sync` again afterward to pick up their folder names.
+
+### Persistent Collection
+
+Set `steam_collection_id` in `safehouse.toml` so you don't need to pass the ID every time:
+
+```toml
+steam_collection_id = "3264403312"
+```
+
+Then just run `safehouse mods sync` — or click **Sync Collection** in the web UI.
+
 ## Finding Mod Information
 
 Every Workshop mod has two identifiers you need:

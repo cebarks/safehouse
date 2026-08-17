@@ -18,8 +18,20 @@ struct ModsTemplate {
     message: Option<String>,
 }
 
+#[derive(Deserialize, Default)]
+pub struct ModsQuery {
+    synced: Option<usize>,
+    added: Option<usize>,
+    removed: Option<usize>,
+    pending: Option<usize>,
+}
+
 #[get("/mods")]
-pub async fn mods_page(session: Session, state: web::Data<AppState>) -> impl Responder {
+pub async fn mods_page(
+    session: Session,
+    state: web::Data<AppState>,
+    query: web::Query<ModsQuery>,
+) -> impl Responder {
     if let Some(r) = require_auth(&session) {
         return r;
     }
@@ -45,11 +57,20 @@ pub async fn mods_page(session: Session, state: web::Data<AppState>) -> impl Res
     let profiles = db.list_mod_profiles().unwrap_or_default();
     drop(db);
     let collection_id = cfg2.steam_collection_id.clone().unwrap_or_default();
+    let message = query.synced.map(|total| {
+        format!(
+            "Synced {} mod(s) from collection. {} added, {} removed, {} pending download.",
+            total,
+            query.added.unwrap_or(0),
+            query.removed.unwrap_or(0),
+            query.pending.unwrap_or(0),
+        )
+    });
     let tmpl = ModsTemplate {
         mods,
         profiles,
         collection_id,
-        message: None,
+        message,
     };
     HttpResponse::Ok()
         .content_type("text/html")
@@ -182,9 +203,17 @@ pub async fn mods_sync(
         return HttpResponse::InternalServerError().body(e.to_string());
     }
 
-    let _ = (result.added.len(), result.removed.len(), result.pending.len());
     HttpResponse::Found()
-        .insert_header(("Location", "/mods"))
+        .insert_header((
+            "Location",
+            format!(
+                "/mods?synced={}&added={}&removed={}&pending={}",
+                result.total,
+                result.added.len(),
+                result.removed.len(),
+                result.pending.len()
+            ),
+        ))
         .finish()
 }
 

@@ -93,7 +93,17 @@ impl SafehouseConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("cannot read config at {}", path.display()))?;
-        toml::from_str(&content).context("invalid safehouse.toml")
+        let mut cfg: Self = toml::from_str(&content).context("invalid safehouse.toml")?;
+        // Normalize steam_collection_id to a bare numeric ID if it's a URL
+        if let Some(ref raw) = cfg.steam_collection_id {
+            match crate::steam::parse_collection_id(raw) {
+                Ok(id) => cfg.steam_collection_id = Some(id),
+                Err(e) => anyhow::bail!(
+                    "invalid steam_collection_id in config: {e}"
+                ),
+            }
+        }
+        Ok(cfg)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {

@@ -237,4 +237,142 @@ mod tests {
             ]
         );
     }
+
+    // --- sync_mods_to_collection tests ---
+
+    #[test]
+    fn test_sync_adds_new_mods_with_known_folders() {
+        let mut ini = IniEditor::parse("WorkshopItems=\nMods=\n");
+        let collection = vec!["111".to_string(), "222".to_string()];
+        let mut known = HashMap::new();
+        known.insert("111".to_string(), vec!["ModA".to_string()]);
+        known.insert("222".to_string(), vec!["ModB".to_string()]);
+        let result = sync_mods_to_collection(&mut ini, &collection, &known);
+        assert_eq!(result.added.len(), 2);
+        assert_eq!(result.removed.len(), 0);
+        assert_eq!(result.pending.len(), 0);
+        assert_eq!(result.total, 2);
+        assert_eq!(ini.mod_names(), vec!["ModA", "ModB"]);
+    }
+
+    #[test]
+    fn test_sync_removes_mods_not_in_collection() {
+        let mut ini = IniEditor::parse("WorkshopItems=111;222\nMods=ModA;ModB\n");
+        let collection = vec!["111".to_string()]; // 222 removed from collection
+        let known = HashMap::new();
+        let result = sync_mods_to_collection(&mut ini, &collection, &known);
+        assert_eq!(result.removed.len(), 1);
+        assert_eq!(result.removed[0].0, "222");
+        assert_eq!(ini.mod_names(), vec!["ModA"]);
+    }
+
+    #[test]
+    fn test_sync_keeps_existing_mods() {
+        let mut ini = IniEditor::parse("WorkshopItems=111\nMods=ModA\n");
+        let collection = vec!["111".to_string()];
+        let known = HashMap::new();
+        let result = sync_mods_to_collection(&mut ini, &collection, &known);
+        assert_eq!(result.added.len(), 0);
+        assert_eq!(result.removed.len(), 0);
+        assert_eq!(result.total, 1);
+        assert_eq!(ini.mod_names(), vec!["ModA"]);
+    }
+
+    #[test]
+    fn test_sync_pending_mods_added_to_workshop_ids_only() {
+        let mut ini = IniEditor::parse("WorkshopItems=\nMods=\n");
+        let collection = vec!["111".to_string(), "222".to_string()];
+        let mut known = HashMap::new();
+        known.insert("111".to_string(), vec!["ModA".to_string()]);
+        // 222 has no known folder name
+        let result = sync_mods_to_collection(&mut ini, &collection, &known);
+        assert_eq!(result.pending, vec!["222"]);
+        assert_eq!(result.total, 1); // only ModA is "active"
+        assert!(ini.workshop_ids().contains(&"222".to_string())); // but 222 is in WorkshopItems
+        assert_eq!(ini.mod_names(), vec!["ModA"]); // not in Mods
+    }
+
+    #[test]
+    fn test_sync_handles_multi_mod_packs() {
+        let mut ini = IniEditor::parse("WorkshopItems=\nMods=\n");
+        let collection = vec!["111".to_string()];
+        let mut known = HashMap::new();
+        known.insert("111".to_string(), vec!["SubModA".to_string(), "SubModB".to_string()]);
+        let result = sync_mods_to_collection(&mut ini, &collection, &known);
+        assert_eq!(result.added.len(), 1);
+        assert_eq!(result.added[0].1, vec!["SubModA", "SubModB"]);
+        assert_eq!(ini.mod_names(), vec!["SubModA", "SubModB"]);
+    }
+
+    #[test]
+    fn test_sync_idempotent() {
+        let mut ini = IniEditor::parse("WorkshopItems=111;222\nMods=ModA;ModB\n");
+        let collection = vec!["111".to_string(), "222".to_string()];
+        let known = HashMap::new();
+        let result = sync_mods_to_collection(&mut ini, &collection, &known);
+        assert_eq!(result.added.len(), 0);
+        assert_eq!(result.removed.len(), 0);
+        assert_eq!(ini.workshop_ids(), vec!["111", "222"]);
+        assert_eq!(ini.mod_names(), vec!["ModA", "ModB"]);
+    }
+
+    // --- parse_mod_info_id tests ---
+
+    #[test]
+    fn test_parse_mod_info_id_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mod.info");
+        std::fs::write(&path, "name=Brita's Weapon Pack\nid=BritasWeaponPack\n").unwrap();
+        assert_eq!(parse_mod_info_id(&path), Some("BritasWeaponPack".to_string()));
+    }
+
+    #[test]
+    fn test_parse_mod_info_id_with_spaces() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mod.info");
+        std::fs::write(&path, "id= MyMod \nname=My Mod\n").unwrap();
+        assert_eq!(parse_mod_info_id(&path), Some("MyMod".to_string()));
+    }
+
+    #[test]
+    fn test_parse_mod_info_id_missing_id_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mod.info");
+        std::fs::write(&path, "name=SomeMod\nversion=1.0\n").unwrap();
+        assert_eq!(parse_mod_info_id(&path), None);
+    }
+
+    #[test]
+    fn test_parse_mod_info_id_missing_file() {
+        let path = std::path::PathBuf::from("/nonexistent/mod.info");
+        assert_eq!(parse_mod_info_id(&path), None);
+    }
+
+    #[test]
+    fn test_parse_mod_info_id_empty_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mod.info");
+        std::fs::write(&path, "id=\nname=SomeMod\n").unwrap();
+        assert_eq!(parse_mod_info_id(&path), None);
+    }
+
+    // --- scan_workshop_mod_folders tests ---
+
+    #[test]
+    fn test_scan_workshop_mod_folders_discovers_mods() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mod_dir = tmp.path()
+            .join("steamapps/workshop/content/108600/12345/mods/TestMod");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(mod_dir.join("mod.info"), "id=TestMod\n").unwrap();
+        let result = scan_workshop_mod_folders(tmp.path());
+        assert_eq!(result.get("12345").unwrap(), &vec!["TestMod".to_string()]);
+    }
+
+    #[test]
+    fn test_scan_workshop_mod_folders_missing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = scan_workshop_mod_folders(tmp.path());
+        assert!(result.is_empty());
+    }
 }

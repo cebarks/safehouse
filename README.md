@@ -8,7 +8,7 @@ Built in Rust — one `safehouse` binary handles server lifecycle, mod managemen
 
 - **Server lifecycle** — start, stop, restart, status, real-time log tailing with `--follow`
 - **Container-managed** — PZ runs in a podman container (fedora-minimal + steamcmd); clean PID 1 signal propagation, no orphan processes
-- **Mod management** — add/remove Steam Workshop mods by ID, named mod profiles for quick switching
+- **Mod management** — sync from a Steam Workshop collection, add/remove mods by ID, named mod profiles for quick switching
 - **World backups** — create/restore/prune `.tar.gz` snapshots with automatic RCON save-before-backup
 - **Config editing** — comment-preserving editors for `server.ini` and `SandboxVars.lua` (dotted key support for nested Lua tables)
 - **RCON console** — send admin commands: kick, ban, chat, save, give items, list players

@@ -200,4 +200,47 @@ mod tests {
         });
         assert!(parse_file_details(&json).is_none());
     }
+
+    #[test]
+    fn test_parse_collection_id_raw_numeric() {
+        assert_eq!(parse_collection_id("3264403312").unwrap(), "3264403312");
+    }
+
+    #[test]
+    fn test_parse_collection_id_with_whitespace() {
+        assert_eq!(parse_collection_id("  3264403312  ").unwrap(), "3264403312");
+    }
+
+    #[test]
+    fn test_parse_collection_id_from_sharedfiles_url() {
+        let url = "https://steamcommunity.com/sharedfiles/filedetails/?id=3264403312";
+        assert_eq!(parse_collection_id(url).unwrap(), "3264403312");
+    }
+
+    #[test]
+    fn test_parse_collection_id_from_workshop_url() {
+        let url = "https://steamcommunity.com/workshop/filedetails/?id=3264403312";
+        assert_eq!(parse_collection_id(url).unwrap(), "3264403312");
+    }
+
+    #[test]
+    fn test_parse_collection_id_url_with_extra_params() {
+        let url = "https://steamcommunity.com/sharedfiles/filedetails/?id=3264403312&searchtext=";
+        assert_eq!(parse_collection_id(url).unwrap(), "3264403312");
+    }
+
+    #[test]
+    fn test_parse_collection_id_rejects_empty() {
+        assert!(parse_collection_id("").is_err());
+    }
+
+    #[test]
+    fn test_parse_collection_id_rejects_text() {
+        assert!(parse_collection_id("not-a-number").is_err());
+    }
+
+    #[test]
+    fn test_parse_collection_id_rejects_url_without_id() {
+        assert!(parse_collection_id("https://steamcommunity.com/sharedfiles/").is_err());
+    }
 }

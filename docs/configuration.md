@@ -82,6 +82,7 @@ backup_rcon_save = true
 | `rcon_port` | u16 | `27015` | RCON port (written to `server.ini` automatically) |
 | `web_bind` | string | `"0.0.0.0"` | Web UI bind address |
 | `web_port` | u16 | `9292` | Web UI port |
+| `steam_collection_id` | string? | none | Steam Workshop collection ID for `mods sync` |
 | `discord_webhook_url` | string? | none | Discord webhook for notifications |
 | `backup_retention_days` | u32 | `7` | Auto-prune backups older than this |
 | `backup_rcon_save` | bool | `true` | Send RCON save before backup |

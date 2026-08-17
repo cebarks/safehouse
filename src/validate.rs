@@ -98,18 +98,22 @@ pub fn validate_workshop_id(id: &str) -> Result<()> {
 
 /// Validate a mod folder name as written into the `Mods=` list in
 /// `server.ini`. Mod folder names are filesystem directory names chosen by
-/// Workshop mod authors; restrict to a conservative safe charset so a
-/// crafted name can't inject an extra `;`-separated mod entry, an `=` that
-/// corrupts the `key=value` line, or a newline that smuggles another key.
+/// Workshop mod authors. Real PZ mods use characters like `()`, `&`, `+`,
+/// spaces, dots, and brackets in their folder names. We allow those but
+/// reject the three characters that would corrupt the INI format:
+///   - `;` — would inject an extra mod entry
+///   - `=` — would corrupt the key=value line
+///   - newlines/control chars — would smuggle another INI key
 pub fn validate_mod_folder_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("mod folder name must not be empty");
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        bail!("mod folder name may only contain letters, digits, '_', and '-' (got: {name:?})");
+    reject_control_chars(name, "mod folder name")?;
+    if name.contains(';') {
+        bail!("mod folder name must not contain ';' (got: {name:?})");
+    }
+    if name.contains('=') {
+        bail!("mod folder name must not contain '=' (got: {name:?})");
     }
     Ok(())
 }
@@ -231,6 +235,16 @@ mod tests {
     fn test_mod_folder_name_accepts_safe_chars() {
         assert!(validate_mod_folder_name("BritasWeaponPack").is_ok());
         assert!(validate_mod_folder_name("Mod-Name_2").is_ok());
+    }
+
+    #[test]
+    fn test_mod_folder_name_accepts_real_pz_names() {
+        assert!(validate_mod_folder_name("Arsenal(26)GunFighter").is_ok());
+        assert!(validate_mod_folder_name("ScrapWeapons(new version)").is_ok());
+        assert!(validate_mod_folder_name("Literature&Magazines").is_ok());
+        assert!(validate_mod_folder_name("Authentic Z - Current").is_ok());
+        assert!(validate_mod_folder_name("AuthenticZBackpacks+").is_ok());
+        assert!(validate_mod_folder_name("LitSortOGSN_chocolate").is_ok());
     }
 
     #[test]
