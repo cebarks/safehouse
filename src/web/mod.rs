@@ -82,6 +82,7 @@ pub async fn run_server(
             .service(handlers::configs::config_set)
             .service(handlers::mods::mods_page)
             .service(handlers::mods::mods_add)
+            .service(handlers::mods::mods_sync)
             .service(handlers::mods::mods_remove)
             .service(handlers::backups::backups_page)
             .service(handlers::backups::backup_create)

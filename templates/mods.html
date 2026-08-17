@@ -4,11 +4,23 @@
 {% match message %} {% when Some with (msg) %}
 <p class="info">{{ msg }}</p>
 {% when None %} {% endmatch %}
-<form method="post" action="/mods/add" style="margin-bottom: 1rem">
-  <input type="text" name="workshop_id" placeholder="Workshop ID" />
-  <input type="text" name="mod_name" placeholder="Mod folder name" />
-  <button type="submit" class="btn btn-primary">Add Mod</button>
-</form>
+<div style="display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap">
+  <form method="post" action="/mods/sync">
+    <input
+      type="text"
+      name="collection"
+      placeholder="Collection ID or URL"
+      value="{{ collection_id }}"
+      style="width: 320px"
+    />
+    <button type="submit" class="btn btn-primary">Sync Collection</button>
+  </form>
+  <form method="post" action="/mods/add">
+    <input type="text" name="workshop_id" placeholder="Workshop ID" />
+    <input type="text" name="mod_name" placeholder="Mod folder name" />
+    <button type="submit" class="btn btn-primary">Add Mod</button>
+  </form>
+</div>
 <table>
   <thead>
     <tr>

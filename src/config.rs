@@ -58,6 +58,9 @@ pub struct SafehouseConfig {
     #[serde(default = "default_true")]
     pub backup_rcon_save: bool,
 
+    /// Steam Workshop collection ID to sync mods from
+    pub steam_collection_id: Option<String>,
+
     /// Session secret for web UI cookie signing (auto-generated on first serve)
     #[serde(default)]
     pub session_secret: String,
@@ -80,6 +83,7 @@ impl Default for SafehouseConfig {
             discord_webhook_url: None,
             backup_retention_days: default_backup_retention_days(),
             backup_rcon_save: true,
+            steam_collection_id: None,
             session_secret: String::new(),
         }
     }

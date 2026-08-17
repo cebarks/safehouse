@@ -168,6 +168,11 @@ pub enum ModAction {
     Remove { workshop_id: String },
     /// Fetch and display Workshop metadata for an ID
     Info { workshop_id: String },
+    /// Sync mods from a Steam Workshop collection
+    Sync {
+        /// Collection ID or full Steam Workshop URL (overrides steam_collection_id in config)
+        collection: Option<String>,
+    },
     /// Manage named mod collection profiles
     Profile {
         #[command(subcommand)]

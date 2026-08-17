@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::path::Path;
+
 use anyhow::Result;
 
 use crate::pz::ini::IniEditor;
@@ -30,6 +33,150 @@ pub fn list_mods(ini: &IniEditor) -> Vec<(String, String)> {
         .into_iter()
         .zip(ini.mod_names())
         .collect()
+}
+
+/// Scan the Steam Workshop download directory for mod.info files.
+/// Returns a map of workshop_id → Vec<mod_folder_name>.
+///
+/// PZ Workshop mods are downloaded to:
+///   <server_install_dir>/steamapps/workshop/content/108600/<workshop_id>/mods/<name>/mod.info
+///
+/// Each mod.info contains a line like `id=BritasWeaponPack`.
+pub fn scan_workshop_mod_folders(install_dir: &Path) -> HashMap<String, Vec<String>> {
+    let workshop_dir = install_dir
+        .join("steamapps")
+        .join("workshop")
+        .join("content")
+        .join("108600");
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+
+    let entries = match std::fs::read_dir(&workshop_dir) {
+        Ok(e) => e,
+        Err(_) => return map,
+    };
+
+    for entry in entries.flatten() {
+        let workshop_id = entry.file_name().to_string_lossy().to_string();
+        if !workshop_id.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let mods_dir = entry.path().join("mods");
+        if let Ok(mod_entries) = std::fs::read_dir(&mods_dir) {
+            for mod_entry in mod_entries.flatten() {
+                let mod_info_path = mod_entry.path().join("mod.info");
+                if let Some(mod_id) = parse_mod_info_id(&mod_info_path) {
+                    map.entry(workshop_id.clone()).or_default().push(mod_id);
+                }
+            }
+        }
+    }
+    map
+}
+
+/// Parse the `id=` field from a PZ mod.info file.
+fn parse_mod_info_id(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("id=") {
+            let id = value.trim();
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Result of a collection sync operation.
+#[derive(Debug)]
+pub struct SyncResult {
+    /// Mods added to server.ini.
+    pub added: Vec<(String, Vec<String>)>,
+    /// Mods removed from server.ini.
+    pub removed: Vec<(String, String)>,
+    /// Workshop IDs where the mod folder name couldn't be discovered
+    /// (not yet downloaded — will appear after a server restart).
+    pub pending: Vec<String>,
+    /// Total mods now in server.ini.
+    pub total: usize,
+}
+
+/// Sync server.ini mod lists to match the given collection workshop IDs.
+///
+/// For each workshop ID in `collection_ids`:
+///   - If already in server.ini → keep
+///   - If not in server.ini → add (using scanned mod folder names)
+///
+/// Any mod in server.ini NOT in `collection_ids` → remove.
+///
+/// `known_folders` maps workshop_id → mod folder names (from scan or DB).
+pub fn sync_mods_to_collection(
+    ini: &mut IniEditor,
+    collection_ids: &[String],
+    known_folders: &HashMap<String, Vec<String>>,
+) -> SyncResult {
+    let current_ids = ini.workshop_ids();
+    let current_names = ini.mod_names();
+    let current_pairs: Vec<(String, String)> = current_ids.into_iter().zip(current_names).collect();
+
+    let mut new_ids: Vec<String> = Vec::new();
+    let mut new_names: Vec<String> = Vec::new();
+    let mut added: Vec<(String, Vec<String>)> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+
+    for cid in collection_ids {
+        if let Some((_, existing_name)) = current_pairs.iter().find(|(id, _)| id == cid) {
+            // Already present — keep as-is
+            new_ids.push(cid.clone());
+            new_names.push(existing_name.clone());
+        } else if let Some(folders) = known_folders.get(cid.as_str()) {
+            // New mod with discovered folder names
+            for folder in folders {
+                new_ids.push(cid.clone());
+                new_names.push(folder.clone());
+            }
+            added.push((cid.clone(), folders.clone()));
+        } else {
+            // New mod but no folder name discovered yet
+            // Still add to WorkshopItems so SteamCMD downloads it
+            new_ids.push(cid.clone());
+            new_names.push(String::new()); // placeholder
+            pending.push(cid.clone());
+        }
+    }
+
+    // Track removed mods
+    let removed: Vec<(String, String)> = current_pairs
+        .into_iter()
+        .filter(|(id, _)| !collection_ids.contains(id))
+        .collect();
+
+    // Clean out empty placeholder names before writing
+    let (final_ids, final_names): (Vec<String>, Vec<String>) = new_ids
+        .into_iter()
+        .zip(new_names)
+        .filter(|(_, name)| !name.is_empty())
+        .unzip();
+
+    // Also set WorkshopItems to include pending (even without mod names)
+    let mut all_workshop_ids = final_ids.clone();
+    for pid in &pending {
+        if !all_workshop_ids.contains(pid) {
+            all_workshop_ids.push(pid.clone());
+        }
+    }
+
+    let total = final_ids.len();
+    ini.set_workshop_ids(&all_workshop_ids);
+    ini.set_mod_names(&final_names);
+
+    SyncResult {
+        added,
+        removed,
+        pending,
+        total,
+    }
 }
 
 #[cfg(test)]

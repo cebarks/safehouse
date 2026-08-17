@@ -4,8 +4,8 @@ use askama::Template;
 use serde::Deserialize;
 
 use crate::pz::ini::IniEditor;
-use crate::pz::mods::{add_mod_to_ini, list_mods, remove_mod_from_ini};
-use crate::steam::fetch_mod_info;
+use crate::pz::mods::{add_mod_to_ini, list_mods, remove_mod_from_ini, scan_workshop_mod_folders, sync_mods_to_collection};
+use crate::steam::{fetch_collection_items, fetch_mod_info, fetch_mod_info_batch, parse_collection_id};
 use crate::web::handlers::auth::require_auth;
 use crate::web::state::AppState;
 
@@ -14,6 +14,7 @@ use crate::web::state::AppState;
 struct ModsTemplate {
     mods: Vec<(String, String, String)>, // (workshop_id, folder_name, title)
     profiles: Vec<String>,
+    collection_id: String,
     message: Option<String>,
 }
 
@@ -23,6 +24,7 @@ pub async fn mods_page(session: Session, state: web::Data<AppState>) -> impl Res
         return r;
     }
     let cfg = state.config.read();
+    let cfg2 = cfg.clone();
     let ini_path = state.dirs.server_ini(&cfg);
     drop(cfg);
     let ini = IniEditor::load(&ini_path).unwrap_or_else(|_| IniEditor::parse(""));
@@ -42,9 +44,11 @@ pub async fn mods_page(session: Session, state: web::Data<AppState>) -> impl Res
         .collect();
     let profiles = db.list_mod_profiles().unwrap_or_default();
     drop(db);
+    let collection_id = cfg2.steam_collection_id.clone().unwrap_or_default();
     let tmpl = ModsTemplate {
         mods,
         profiles,
+        collection_id,
         message: None,
     };
     HttpResponse::Ok()
@@ -95,6 +99,93 @@ pub async fn mods_add(
 pub struct RemoveModForm {
     workshop_id: String,
     mod_name: String,
+}
+
+#[derive(Deserialize)]
+pub struct SyncForm {
+    collection: Option<String>,
+}
+
+#[post("/mods/sync")]
+pub async fn mods_sync(
+    form: web::Form<SyncForm>,
+    session: Session,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    if let Some(r) = require_auth(&session) {
+        return r;
+    }
+
+    let (raw_input, install_dir, ini_path) = {
+        let cfg = state.config.read();
+        let raw = form
+            .collection
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(cfg.steam_collection_id.as_deref())
+            .map(str::to_string);
+        let install = cfg.server_install_dir.clone();
+        let ini = state.dirs.server_ini(&cfg);
+        (raw, install, ini)
+    };
+    let raw = match raw_input {
+        Some(r) => r,
+        None => {
+            return HttpResponse::BadRequest()
+                .body("No collection ID provided and none configured.");
+        }
+    };
+    let collection_id = match parse_collection_id(&raw) {
+        Ok(id) => id,
+        Err(e) => return HttpResponse::BadRequest().body(e.to_string()),
+    };
+
+    // Fetch collection items
+    let workshop_ids = match fetch_collection_items(&state.http, &collection_id).await {
+        Ok(ids) => ids,
+        Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
+    };
+    if workshop_ids.is_empty() {
+        return HttpResponse::BadRequest().body("Collection is empty or not public.");
+    }
+
+    // Fetch metadata
+    if let Ok(infos) = fetch_mod_info_batch(&state.http, &workshop_ids).await {
+        let db = state.db.lock();
+        for info in &infos {
+            let _ = db.upsert_workshop_mod(info, None);
+        }
+    }
+
+    // Scan for folder names
+    let mut known_folders = scan_workshop_mod_folders(&install_dir);
+    {
+        let db = state.db.lock();
+        for id in &workshop_ids {
+            if !known_folders.contains_key(id.as_str()) {
+                if let Ok(Some(cached)) = db.get_cached_mod(id) {
+                    if let Some(folder) = cached.mod_folder_name {
+                        known_folders.insert(id.clone(), vec![folder]);
+                    }
+                }
+            }
+        }
+    }
+
+    // Sync
+    let mut ini = match IniEditor::load(&ini_path) {
+        Ok(ini) => ini,
+        Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
+    };
+    let result = sync_mods_to_collection(&mut ini, &workshop_ids, &known_folders);
+    if let Err(e) = ini.save(&ini_path) {
+        return HttpResponse::InternalServerError().body(e.to_string());
+    }
+
+    let _ = (result.added.len(), result.removed.len(), result.pending.len());
+    HttpResponse::Found()
+        .insert_header(("Location", "/mods"))
+        .finish()
 }
 
 #[post("/mods/remove")]

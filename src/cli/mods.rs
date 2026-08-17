@@ -3,8 +3,8 @@ use anyhow::Result;
 use super::common::CliContext;
 use super::{ModAction, ProfileAction};
 use crate::pz::ini::IniEditor;
-use crate::pz::mods::{add_mod_to_ini, list_mods, remove_mod_from_ini};
-use crate::steam::fetch_mod_info;
+use crate::pz::mods::{add_mod_to_ini, list_mods, remove_mod_from_ini, scan_workshop_mod_folders, sync_mods_to_collection};
+use crate::steam::{fetch_collection_items, fetch_mod_info, fetch_mod_info_batch, parse_collection_id};
 
 pub async fn run(action: &ModAction, ctx: &CliContext) -> Result<()> {
     match action {
@@ -15,6 +15,7 @@ pub async fn run(action: &ModAction, ctx: &CliContext) -> Result<()> {
         } => add(ctx, workshop_id, mod_name).await,
         ModAction::Remove { workshop_id } => remove(ctx, workshop_id),
         ModAction::Info { workshop_id } => info(ctx, workshop_id).await,
+        ModAction::Sync { collection } => sync(ctx, collection.as_deref()).await,
         ModAction::Profile { action } => profile(ctx, action),
     }
 }
@@ -89,6 +90,105 @@ async fn info(ctx: &CliContext, workshop_id: &str) -> Result<()> {
         let preview: String = d.chars().take(200).collect();
         println!("Description: {preview}...");
     }
+    Ok(())
+}
+
+async fn sync(ctx: &CliContext, collection_arg: Option<&str>) -> Result<()> {
+    // Resolve collection ID: CLI arg > config > error
+    let raw = match collection_arg {
+        Some(c) => c.to_string(),
+        None => ctx
+            .config
+            .steam_collection_id
+            .clone()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No collection specified. Pass a collection ID/URL or set \
+                     steam_collection_id in safehouse.toml."
+                )
+            })?,
+    };
+    let collection_id = parse_collection_id(&raw)?;
+    println!("Fetching collection {collection_id}...");
+
+    // 1. Fetch collection items
+    let workshop_ids = fetch_collection_items(&ctx.http, &collection_id).await?;
+    if workshop_ids.is_empty() {
+        anyhow::bail!("Collection {collection_id} is empty or not public.");
+    }
+    println!("Collection contains {} workshop items.", workshop_ids.len());
+
+    // 2. Fetch metadata for all items (batch)
+    let infos = fetch_mod_info_batch(&ctx.http, &workshop_ids).await?;
+    // Cache metadata in DB
+    for info in &infos {
+        let _ = ctx.db.upsert_workshop_mod(info, None);
+    }
+
+    // 3. Scan downloaded workshop mods for folder names
+    let mut known_folders = scan_workshop_mod_folders(&ctx.config.server_install_dir);
+
+    // Also pull folder names from the DB cache for items not on disk
+    for id in &workshop_ids {
+        if !known_folders.contains_key(id.as_str()) {
+            if let Ok(Some(cached)) = ctx.db.get_cached_mod(id) {
+                if let Some(folder) = cached.mod_folder_name {
+                    known_folders.insert(id.clone(), vec![folder]);
+                }
+            }
+        }
+    }
+
+    // 4. Sync server.ini
+    let ini_path = ctx.dirs.server_ini(&ctx.config);
+    let mut ini = IniEditor::load(&ini_path)?;
+    let result = sync_mods_to_collection(&mut ini, &workshop_ids, &known_folders);
+    ini.save(&ini_path)?;
+
+    // 5. Update DB folder mappings for newly discovered mods
+    for (id, folders) in &result.added {
+        if let Some(info) = infos.iter().find(|i| &i.workshop_id == id) {
+            let _ = ctx.db.upsert_workshop_mod(info, folders.first().map(|s| s.as_str()));
+        }
+    }
+
+    // 6. Report results
+    if !result.added.is_empty() {
+        println!("\nAdded ({}):", result.added.len());
+        for (id, folders) in &result.added {
+            let title = infos
+                .iter()
+                .find(|i| &i.workshop_id == id)
+                .map(|i| i.title.as_str())
+                .unwrap_or("?");
+            println!("  + {id} — {title} ({})", folders.join(", "));
+        }
+    }
+    if !result.removed.is_empty() {
+        println!("\nRemoved ({}):", result.removed.len());
+        for (id, name) in &result.removed {
+            println!("  - {id} ({name})");
+        }
+    }
+    if !result.pending.is_empty() {
+        println!(
+            "\n⚠ {} mod(s) need a server restart before their folder names can be discovered:",
+            result.pending.len()
+        );
+        for id in &result.pending {
+            let title = infos
+                .iter()
+                .find(|i| &i.workshop_id == id)
+                .map(|i| i.title.as_str())
+                .unwrap_or("?");
+            println!("  ? {id} — {title}");
+        }
+        println!("  Run `safehouse mods sync` again after the server downloads them.");
+    }
+    println!(
+        "\nserver.ini updated — {} mod(s) active. Restart the server to apply.",
+        result.total
+    );
     Ok(())
 }
 

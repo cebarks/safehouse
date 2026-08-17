@@ -4,6 +4,9 @@ use serde_json::Value;
 const DETAILS_URL: &str =
     "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
 
+const COLLECTION_URL: &str =
+    "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkshopModInfo {
     pub workshop_id: String,
@@ -40,6 +43,105 @@ pub async fn fetch_mod_info(
     let detail = &resp["response"]["publishedfiledetails"][0];
     parse_file_details(detail)
         .with_context(|| format!("no details returned for workshop ID {workshop_id}"))
+}
+
+/// Fetch metadata for multiple Workshop items in one API call.
+pub async fn fetch_mod_info_batch(
+    client: &reqwest::Client,
+    workshop_ids: &[String],
+) -> Result<Vec<WorkshopModInfo>> {
+    if workshop_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut params: Vec<(String, String)> =
+        vec![("itemcount".to_string(), workshop_ids.len().to_string())];
+    for (i, id) in workshop_ids.iter().enumerate() {
+        params.push((format!("publishedfileids[{i}]"), id.clone()));
+    }
+    let resp: Value = client
+        .post(DETAILS_URL)
+        .form(&params)
+        .send()
+        .await
+        .context("Steam API batch request failed")?
+        .json()
+        .await
+        .context("Steam API batch response parse failed")?;
+
+    let details = resp["response"]["publishedfiledetails"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    Ok(details.iter().filter_map(parse_file_details).collect())
+}
+
+/// Fetch all workshop item IDs from a Steam Workshop collection.
+pub async fn fetch_collection_items(
+    client: &reqwest::Client,
+    collection_id: &str,
+) -> Result<Vec<String>> {
+    let params = [
+        ("collectioncount", "1"),
+        ("publishedfileids[0]", collection_id),
+    ];
+    let resp: Value = client
+        .post(COLLECTION_URL)
+        .form(&params)
+        .send()
+        .await
+        .context("Steam collection API request failed")?
+        .json()
+        .await
+        .context("Steam collection API response parse failed")?;
+
+    let details = &resp["response"]["collectiondetails"];
+    let collection = details
+        .as_array()
+        .and_then(|arr| arr.first())
+        .with_context(|| format!("no collection found for ID {collection_id}"))?;
+
+    let result_code = collection["result"].as_i64().unwrap_or(0);
+    if result_code != 1 {
+        anyhow::bail!(
+            "Steam API returned error for collection {collection_id} (result={result_code}). \
+             Check that the collection exists and is public."
+        );
+    }
+
+    let children = collection["children"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let ids: Vec<String> = children
+        .iter()
+        .filter_map(|c| c["publishedfileid"].as_str().map(str::to_owned))
+        .collect();
+    Ok(ids)
+}
+
+/// Parse a collection ID from a URL or raw numeric string.
+/// Accepts:
+///   - `3383526786` (raw ID)
+///   - `https://steamcommunity.com/sharedfiles/filedetails/?id=3383526786`
+///   - `https://steamcommunity.com/workshop/filedetails/?id=3383526786`
+pub fn parse_collection_id(input: &str) -> Result<String> {
+    let trimmed = input.trim();
+    // Raw numeric ID
+    if trimmed.chars().all(|c| c.is_ascii_digit()) && !trimmed.is_empty() {
+        return Ok(trimmed.to_string());
+    }
+    // URL with ?id= parameter
+    if let Some(pos) = trimmed.find("id=") {
+        let after = &trimmed[pos + 3..];
+        let id: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !id.is_empty() {
+            return Ok(id);
+        }
+    }
+    anyhow::bail!(
+        "cannot parse collection ID from {trimmed:?}. \
+         Provide a numeric ID or a Steam Workshop collection URL."
+    )
 }
 
 #[cfg(test)]
