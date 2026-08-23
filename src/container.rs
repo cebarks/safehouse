@@ -245,92 +245,113 @@ async fn stream_container_logs(
 }
 
 /// Run steamcmd inside the container to install/update PZ.
+/// Maximum number of SteamCMD install attempts. SteamCMD intermittently fails
+/// with "Missing configuration" — a known bug where its self-update or app
+/// metadata download doesn't complete on the first try.
+const STEAMCMD_MAX_ATTEMPTS: u32 = 3;
+
 pub async fn run_steamcmd_install(docker: &Docker, config: &SafehouseConfig) -> Result<()> {
-    // Clean up any leftover container
-    let _ = docker
-        .remove_container(
-            "safehouse-setup",
-            Some(
-                RemoveContainerOptionsBuilder::default()
-                    .force(true)
-                    .build(),
-            ),
-        )
-        .await;
-
-    let server_dir = config.server_install_dir.to_string_lossy();
-
-    let host_config = HostConfig {
-        binds: Some(vec![format!("{server_dir}:/server:Z")]),
-        ..Default::default()
-    };
-
-    let container_config = ContainerCreateBody {
-        image: Some(IMAGE_NAME.to_string()),
-        entrypoint: Some(vec!["steamcmd.sh".to_string()]),
-        cmd: Some(vec![
-            "+force_install_dir".to_string(),
-            "/server".to_string(),
-            "+login".to_string(),
-            "anonymous".to_string(),
-            "+app_update".to_string(),
-            "380870".to_string(),
-            "validate".to_string(),
-            "+quit".to_string(),
-        ]),
-        host_config: Some(host_config),
-        ..Default::default()
-    };
-
-    let options = CreateContainerOptionsBuilder::default()
-        .name("safehouse-setup")
-        .build();
-
-    docker
-        .create_container(Some(options), container_config)
-        .await
-        .context("failed to create setup container")?;
-
-    docker
-        .start_container("safehouse-setup", None::<bollard::query_parameters::StartContainerOptions>)
-        .await
-        .context("failed to start setup container")?;
-
-    // Stream logs until the container exits (follow=true blocks until EOF)
     println!("Installing Project Zomboid dedicated server via SteamCMD...");
-    stream_container_logs(docker, "safehouse-setup", true, 0).await.ok();
 
-    // Wait for the container to fully stop, then grab exit code
-    let mut wait_stream = docker.wait_container("safehouse-setup", None::<bollard::query_parameters::WaitContainerOptions>);
-    let exit_code = match wait_stream.next().await {
-        Some(Ok(resp)) => resp.status_code,
-        Some(Err(e)) => {
-            // Container may have already exited — try inspect as fallback
-            tracing::debug!("wait_container error (may already be stopped): {e}");
-            docker
-                .inspect_container("safehouse-setup", None)
-                .await?
-                .state
-                .and_then(|s| s.exit_code)
-                .unwrap_or(-1) as i64
+    let server_dir = config.server_install_dir.to_string_lossy().to_string();
+    let mut last_exit: i64 = -1;
+
+    for attempt in 1..=STEAMCMD_MAX_ATTEMPTS {
+        // Clean up any leftover container
+        let _ = docker
+            .remove_container(
+                "safehouse-setup",
+                Some(
+                    RemoveContainerOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await;
+
+        let host_config = HostConfig {
+            binds: Some(vec![format!("{server_dir}:/server:Z")]),
+            ..Default::default()
+        };
+
+        let container_config = ContainerCreateBody {
+            image: Some(IMAGE_NAME.to_string()),
+            entrypoint: Some(vec!["steamcmd.sh".to_string()]),
+            cmd: Some(vec![
+                "+force_install_dir".to_string(),
+                "/server".to_string(),
+                "+login".to_string(),
+                "anonymous".to_string(),
+                "+app_update".to_string(),
+                "380870".to_string(),
+                "validate".to_string(),
+                "+quit".to_string(),
+            ]),
+            host_config: Some(host_config),
+            ..Default::default()
+        };
+
+        let options = CreateContainerOptionsBuilder::default()
+            .name("safehouse-setup")
+            .build();
+
+        docker
+            .create_container(Some(options), container_config)
+            .await
+            .context("failed to create setup container")?;
+
+        docker
+            .start_container("safehouse-setup", None::<bollard::query_parameters::StartContainerOptions>)
+            .await
+            .context("failed to start setup container")?;
+
+        if attempt > 1 {
+            println!("SteamCMD attempt {attempt}/{STEAMCMD_MAX_ATTEMPTS}...");
         }
-        None => -1,
-    };
+        stream_container_logs(docker, "safehouse-setup", true, 0).await.ok();
 
-    // Cleanup
-    let _ = docker
-        .remove_container(
-            "safehouse-setup",
-            Some(
-                RemoveContainerOptionsBuilder::default()
-                    .force(true)
-                    .build(),
-            ),
-        )
-        .await;
+        // Wait for the container to fully stop, then grab exit code
+        let mut wait_stream = docker.wait_container("safehouse-setup", None::<bollard::query_parameters::WaitContainerOptions>);
+        last_exit = match wait_stream.next().await {
+            Some(Ok(resp)) => resp.status_code,
+            Some(Err(e)) => {
+                tracing::debug!("wait_container error (may already be stopped): {e}");
+                docker
+                    .inspect_container("safehouse-setup", None)
+                    .await?
+                    .state
+                    .and_then(|s| s.exit_code)
+                    .unwrap_or(-1) as i64
+            }
+            None => -1,
+        };
 
-    if exit_code != 0 {
-        bail!("SteamCMD exited with code {exit_code}");
+        // Cleanup the container between attempts
+        let _ = docker
+            .remove_container(
+                "safehouse-setup",
+                Some(
+                    RemoveContainerOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await;
+
+        if last_exit == 0 {
+            break;
+        }
+
+        if attempt < STEAMCMD_MAX_ATTEMPTS {
+            println!(
+                "SteamCMD exited with code {last_exit}, retrying ({}/{STEAMCMD_MAX_ATTEMPTS})...",
+                attempt + 1,
+            );
+        }
+    }
+
+    if last_exit != 0 {
+        bail!("SteamCMD failed after {STEAMCMD_MAX_ATTEMPTS} attempts (last exit code: {last_exit})");
     }
 
     println!("PZ server installed.");
