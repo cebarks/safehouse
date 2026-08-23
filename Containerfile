@@ -7,10 +7,14 @@ RUN microdnf install -y \
         tar gzip curl \
     && microdnf clean all
 
-# Install SteamCMD
+# Install SteamCMD and let it self-update during image build.
+# Without this, SteamCMD does 1-2 rounds of 40MB+ self-updates at runtime,
+# restarting itself each time — which loses the command-line arguments and
+# causes intermittent "Missing configuration" / "Command aborted" failures.
 RUN mkdir -p /steamcmd \
     && curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
-       | tar xz -C /steamcmd
+       | tar xz -C /steamcmd \
+    && /steamcmd/steamcmd.sh +quit
 
 # PZ server will be installed into /server via volume or safehouse setup
 # World data lives in /zomboid
