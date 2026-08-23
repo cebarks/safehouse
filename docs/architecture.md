@@ -36,6 +36,7 @@ src/
 │
 ├── pz/
 │   ├── mod.rs           # PZ module declarations
+│   ├── case_fix.rs      # Lowercase symlink fixer for case-sensitive Linux filesystems
 │   ├── detect.rs        # Binary detection, PID utilities
 │   ├── ini.rs           # IniEditor — comment-preserving server.ini parser
 │   ├── sandbox.rs       # SandboxEditor — Lua nested table parser (dotted keys)
@@ -103,6 +104,10 @@ The `-cachedir=/zomboid` flag tells PZ to use the volume-mounted data directory 
 ### Session Security
 
 Web UI sessions use a 64-byte random secret (auto-generated, stored in `safehouse.toml`) for cookie signing via `actix-session`. Passwords are hashed with Argon2id.
+
+### Case-Sensitivity Fix
+
+PZ lowercases file paths internally (Windows heritage). On Linux's case-sensitive filesystems, this breaks mod loading when files have uppercase names. `case_fix.rs` walks the server install directory and creates relative lowercase symlinks alongside any entry with uppercase ASCII characters — e.g., `animsets -> AnimSets`. The fix runs automatically before container creation and after SteamCMD installs, plus on-demand via `safehouse mods fix-case`. Uses `symlink_metadata` (lstat) instead of `Path::exists()` to correctly handle dangling symlinks at target paths.
 
 ## Database Schema
 
