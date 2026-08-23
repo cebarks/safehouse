@@ -19,7 +19,7 @@ pub mod webhook;
     about = "Project Zomboid dedicated server manager"
 )]
 pub struct Cli {
-    /// Safehouse data directory (default: ~/.local/share/safehouse)
+    /// Safehouse data directory (default: CWD for setup, ~/.local/share/safehouse otherwise)
     #[arg(long, global = true)]
     pub data_dir: Option<PathBuf>,
 
@@ -39,7 +39,7 @@ pub struct Cli {
 pub enum Command {
     /// Initialize safehouse and install the PZ dedicated server
     Setup {
-        /// Where to install the PZ server (default: ~/pzserver)
+        /// Where to install the PZ server (default: ./pzserver)
         #[arg(long)]
         install_dir: Option<PathBuf>,
         /// Admin password for the PZ server

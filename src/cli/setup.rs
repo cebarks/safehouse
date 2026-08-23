@@ -12,12 +12,15 @@ pub async fn run(
     data_dir: Option<&Path>,
 ) -> Result<()> {
     println!("=== Safehouse Setup ===");
-    let dirs = SafehouseDirs::detect(data_dir)?;
+    // Default to CWD for both data dir and install dir so
+    // `safehouse setup` in a project directory keeps everything local.
+    let cwd = std::env::current_dir().context("cannot determine working directory")?;
+    let dirs = SafehouseDirs::detect(data_dir.or(Some(cwd.as_path())))?;
     dirs.ensure_dirs()?;
 
     let install = install_dir
         .map(PathBuf::from)
-        .unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default().join("pzserver"));
+        .unwrap_or_else(|| cwd.join("pzserver"));
 
     // Canonicalize so the container bind-mount gets an absolute path
     std::fs::create_dir_all(&install)?;
@@ -35,16 +38,14 @@ pub async fn run(
     let mut cfg = SafehouseConfig::default();
     cfg.server_install_dir = install;
 
-    // When using a custom data dir, keep zomboid data inside it
-    if data_dir.is_some() {
-        let zomboid_dir = dirs.root.join("zomboid");
-        std::fs::create_dir_all(&zomboid_dir)?;
-        cfg.zomboid_data_dir = Some(
-            zomboid_dir
-                .canonicalize()
-                .context("failed to resolve zomboid data directory")?,
-        );
-    }
+    // Keep zomboid data inside the data dir (co-located with config + backups)
+    let zomboid_dir = dirs.root.join("zomboid");
+    std::fs::create_dir_all(&zomboid_dir)?;
+    cfg.zomboid_data_dir = Some(
+        zomboid_dir
+            .canonicalize()
+            .context("failed to resolve zomboid data directory")?,
+    );
 
     container::run_steamcmd_install(&docker, &cfg).await?;
 
