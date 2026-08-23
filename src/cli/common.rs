@@ -15,7 +15,14 @@ pub fn resolve_context(cli: &super::Cli) -> Result<CliContext> {
     let dirs = SafehouseDirs::detect(cli.data_dir.as_deref())?;
     dirs.ensure_dirs()?;
 
-    let config_path = cli.config.clone().unwrap_or_else(|| dirs.config_path());
+    let cwd_config = std::path::PathBuf::from("safehouse.toml");
+    let config_path = cli.config.clone().unwrap_or_else(|| {
+        if cwd_config.exists() {
+            cwd_config
+        } else {
+            dirs.config_path()
+        }
+    });
     let config = if config_path.exists() {
         SafehouseConfig::load(&config_path)?
     } else {
