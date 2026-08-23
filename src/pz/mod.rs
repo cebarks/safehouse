@@ -1,3 +1,4 @@
+pub mod case_fix;
 pub mod detect;
 pub mod ini;
 pub mod logs;
