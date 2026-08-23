@@ -19,6 +19,9 @@ pub const CONTAINER_NAME: &str = "safehouse-pz";
 /// Default image name (built from the repo's Containerfile).
 pub const IMAGE_NAME: &str = "ghcr.io/cebarks/safehouse-pz:latest";
 
+/// Locally-built image name (fallback when registry pull fails).
+const LOCAL_IMAGE_NAME: &str = "localhost/safehouse-pz:latest";
+
 /// Connect to the local podman/docker daemon.
 pub async fn connect() -> Result<Docker> {
     Docker::connect_with_podman_defaults()
@@ -26,11 +29,20 @@ pub async fn connect() -> Result<Docker> {
 }
 
 /// Ensure the safehouse-pz image exists locally, pulling from GHCR if needed.
-pub async fn ensure_image(docker: &Docker) -> Result<()> {
-    if docker.inspect_image(IMAGE_NAME).await.is_ok() {
-        return Ok(());
+/// Resolve the container image to use, returning its name.
+/// Prefers a local build, then a cached registry image, then pulls from GHCR.
+pub async fn ensure_image(docker: &Docker) -> Result<String> {
+    // 1. Prefer a locally-built image (dev builds, custom patches).
+    if docker.inspect_image(LOCAL_IMAGE_NAME).await.is_ok() {
+        return Ok(LOCAL_IMAGE_NAME.to_string());
     }
 
+    // 2. Already have the registry image cached?
+    if docker.inspect_image(IMAGE_NAME).await.is_ok() {
+        return Ok(IMAGE_NAME.to_string());
+    }
+
+    // 3. Pull from GHCR.
     println!("Pulling {IMAGE_NAME}...");
     use bollard::query_parameters::CreateImageOptionsBuilder;
     use futures_util::TryStreamExt;
@@ -44,11 +56,12 @@ pub async fn ensure_image(docker: &Docker) -> Result<()> {
         .try_collect::<Vec<_>>()
         .await
         .with_context(|| format!(
-            "Failed to pull '{IMAGE_NAME}'.\n\
-             You can also build locally: podman build -t safehouse-pz -f Containerfile ."
+            "No container image available.\n\
+             • Pull from registry: podman pull {IMAGE_NAME}\n\
+             • Or build locally:    podman build -t safehouse-pz -f Containerfile ."
         ))?;
 
-    Ok(())
+    Ok(IMAGE_NAME.to_string())
 }
 
 /// Check if the safehouse container is currently running.
@@ -63,7 +76,7 @@ pub async fn is_running(docker: &Docker) -> bool {
 }
 
 /// Create and start the PZ server container.
-pub async fn create_and_start(docker: &Docker, config: &SafehouseConfig) -> Result<()> {
+pub async fn create_and_start(docker: &Docker, config: &SafehouseConfig, image: &str) -> Result<()> {
     // Fix case-sensitivity issues: create lowercase symlinks so PZ's
     // lowercased path lookups resolve on Linux. Must run BEFORE
     // create_container because the :Z bind mount triggers SELinux
@@ -157,7 +170,7 @@ pub async fn create_and_start(docker: &Docker, config: &SafehouseConfig) -> Resu
     }
 
     let container_config = ContainerCreateBody {
-        image: Some(IMAGE_NAME.to_string()),
+        image: Some(image.to_string()),
         cmd: Some(cmd),
         host_config: Some(host_config),
         ..Default::default()
@@ -264,7 +277,7 @@ async fn stream_container_logs(
 /// metadata download doesn't complete on the first try.
 const STEAMCMD_MAX_ATTEMPTS: u32 = 3;
 
-pub async fn run_steamcmd_install(docker: &Docker, config: &SafehouseConfig) -> Result<()> {
+pub async fn run_steamcmd_install(docker: &Docker, config: &SafehouseConfig, image: &str) -> Result<()> {
     println!("Installing Project Zomboid dedicated server via SteamCMD...");
 
     let server_dir = config.server_install_dir.to_string_lossy().to_string();
@@ -289,7 +302,7 @@ pub async fn run_steamcmd_install(docker: &Docker, config: &SafehouseConfig) -> 
         };
 
         let container_config = ContainerCreateBody {
-            image: Some(IMAGE_NAME.to_string()),
+            image: Some(image.to_string()),
             entrypoint: Some(vec!["steamcmd.sh".to_string()]),
             cmd: Some(vec![
                 "+force_install_dir".to_string(),

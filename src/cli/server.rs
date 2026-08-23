@@ -19,7 +19,7 @@ pub async fn run(action: &ServerAction, ctx: &CliContext) -> Result<()> {
 
 async fn start(ctx: &CliContext, timeout_secs: u64) -> Result<()> {
     let docker = container::connect().await?;
-    container::ensure_image(&docker).await?;
+    let image = container::ensure_image(&docker).await?;
 
     if container::is_running(&docker).await {
         bail!("Server is already running. Use `safehouse server status` to check.");
@@ -56,7 +56,7 @@ async fn start(ctx: &CliContext, timeout_secs: u64) -> Result<()> {
     }
 
     // Start the container
-    container::create_and_start(&docker, &ctx.config).await?;
+    container::create_and_start(&docker, &ctx.config, &image).await?;
 
     // Wait for RCON to become available (indicates server is ready)
     println!("Waiting for server to become ready (timeout: {timeout_secs}s)...");

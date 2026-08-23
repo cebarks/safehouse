@@ -33,7 +33,7 @@ pub async fn run(
 
     // Download PZ via SteamCMD inside the container
     let docker = container::connect().await?;
-    container::ensure_image(&docker).await?;
+    let image = container::ensure_image(&docker).await?;
 
     let mut cfg = SafehouseConfig::default();
     cfg.server_install_dir = install;
@@ -47,7 +47,7 @@ pub async fn run(
             .context("failed to resolve zomboid data directory")?,
     );
 
-    container::run_steamcmd_install(&docker, &cfg).await?;
+    container::run_steamcmd_install(&docker, &cfg, &image).await?;
 
     cfg.rcon_password = admin_password.unwrap_or("changeme").to_string();
 
