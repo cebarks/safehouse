@@ -17,7 +17,7 @@ use crate::pz::case_fix::fix_case;
 pub const CONTAINER_NAME: &str = "safehouse-pz";
 
 /// Default image name (built from the repo's Containerfile).
-pub const IMAGE_NAME: &str = "localhost/safehouse-pz:latest";
+pub const IMAGE_NAME: &str = "ghcr.io/cebarks/safehouse-pz:latest";
 
 /// Connect to the local podman/docker daemon.
 pub async fn connect() -> Result<Docker> {
@@ -25,16 +25,30 @@ pub async fn connect() -> Result<Docker> {
         .context("failed to connect to podman/docker — is the socket active?")
 }
 
-/// Check whether the safehouse-pz image exists locally.
+/// Ensure the safehouse-pz image exists locally, pulling from GHCR if needed.
 pub async fn ensure_image(docker: &Docker) -> Result<()> {
-    match docker.inspect_image(IMAGE_NAME).await {
-        Ok(_) => Ok(()),
-        Err(_) => bail!(
-            "Container image '{}' not found.\n\
-             Build it with: podman build -t safehouse-pz -f Containerfile .",
-            IMAGE_NAME
-        ),
+    if docker.inspect_image(IMAGE_NAME).await.is_ok() {
+        return Ok(());
     }
+
+    println!("Pulling {IMAGE_NAME}...");
+    use bollard::query_parameters::CreateImageOptionsBuilder;
+    use futures_util::TryStreamExt;
+
+    let opts = CreateImageOptionsBuilder::default()
+        .from_image(IMAGE_NAME)
+        .build();
+
+    docker
+        .create_image(Some(opts), None, None)
+        .try_collect::<Vec<_>>()
+        .await
+        .with_context(|| format!(
+            "Failed to pull '{IMAGE_NAME}'.\n\
+             You can also build locally: podman build -t safehouse-pz -f Containerfile ."
+        ))?;
+
+    Ok(())
 }
 
 /// Check if the safehouse container is currently running.
