@@ -1,6 +1,9 @@
+use std::os::unix::fs as unix_fs;
 use std::path::Path;
 
 use anyhow::Result;
+use tracing::warn;
+use walkdir::WalkDir;
 
 /// Summary of a case-fix scan.
 #[derive(Debug, Default)]
@@ -23,9 +26,110 @@ pub struct CaseFixResult {
 /// The scan is best-effort: individual failures are logged and counted but
 /// do not abort the overall operation.
 pub fn fix_case(root: &Path) -> Result<CaseFixResult> {
-    // Stub — will be implemented in Task 3
-    let _ = root;
-    Ok(CaseFixResult::default())
+    anyhow::ensure!(root.is_dir(), "case-fix root does not exist: {}", root.display());
+
+    let mut result = CaseFixResult::default();
+
+    // Single depth-first walk. Do NOT follow symlinks to avoid cycles.
+    // min_depth(1) skips the root entry itself — we only fix contents.
+    for entry in WalkDir::new(root).min_depth(1).follow_links(false) {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                // Permission denied or other per-entry error — skip.
+                warn!("case-fix: skipping inaccessible path: {e}");
+                result.failures += 1;
+                continue;
+            }
+        };
+
+        let path = entry.path();
+
+        // Phase 1: Clean dangling symlinks.
+        if entry.path_is_symlink() {
+            // Check if target exists. symlink_metadata succeeded (walkdir gave
+            // us the entry), but the *target* may not resolve.
+            if !path.exists() {
+                match std::fs::remove_file(path) {
+                    Ok(()) => result.symlinks_cleaned += 1,
+                    Err(e) => {
+                        warn!("case-fix: failed to remove dangling symlink {}: {e}", path.display());
+                        result.failures += 1;
+                    }
+                }
+            }
+            // Don't create symlinks for symlinks — only real entries.
+            continue;
+        }
+
+        // Phase 2: Create lowercase symlinks for entries with uppercase ASCII.
+        let file_name = entry.file_name();
+        let name_bytes = file_name.as_encoded_bytes();
+
+        // Skip if no ASCII uppercase characters.
+        if !name_bytes.iter().any(|b| b.is_ascii_uppercase()) {
+            continue;
+        }
+
+        let mut lower_bytes = name_bytes.to_vec();
+        lower_bytes.make_ascii_lowercase();
+
+        // Safety: make_ascii_lowercase only changes ASCII bytes, preserving
+        // valid UTF-8 / OsStr encoding.
+        let lower_name = unsafe {
+            std::ffi::OsStr::from_encoded_bytes_unchecked(&lower_bytes)
+        };
+
+        // The symlink goes in the same parent directory.
+        let parent = match path.parent() {
+            Some(p) => p,
+            None => continue,
+        };
+        let symlink_path = parent.join(lower_name);
+
+        // Use symlink_metadata (lstat) — does NOT follow symlinks.
+        // Path::exists() follows symlinks, making dangling symlinks invisible
+        // while they still occupy the directory entry (causing EEXIST).
+        match std::fs::symlink_metadata(&symlink_path) {
+            Ok(_meta) => {
+                // Something already exists at the lowercase path.
+                // Could be a real file/dir (collision) or a valid symlink
+                // from a previous run (idempotent — skip silently).
+                // Only warn on collisions (non-symlinks).
+                if !_meta.is_symlink() {
+                    result.warnings.push(format!(
+                        "collision: both '{}' and '{}' exist in {}",
+                        file_name.to_string_lossy(),
+                        lower_name.to_string_lossy(),
+                        parent.display(),
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Target path is free — create the symlink.
+                // Use relative target: symlink points to sibling entry by name.
+                if let Err(e) = unix_fs::symlink(file_name, &symlink_path) {
+                    warn!(
+                        "case-fix: failed to create symlink {} -> {}: {e}",
+                        symlink_path.display(),
+                        file_name.to_string_lossy(),
+                    );
+                    result.failures += 1;
+                } else {
+                    result.symlinks_created += 1;
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "case-fix: failed to check {}: {e}",
+                    symlink_path.display(),
+                );
+                result.failures += 1;
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]
