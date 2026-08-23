@@ -11,6 +11,7 @@ use bollard::Docker;
 use futures_util::StreamExt;
 
 use crate::config::SafehouseConfig;
+use crate::pz::case_fix::fix_case;
 
 /// Default container name managed by safehouse.
 pub const CONTAINER_NAME: &str = "safehouse-pz";
@@ -49,6 +50,27 @@ pub async fn is_running(docker: &Docker) -> bool {
 
 /// Create and start the PZ server container.
 pub async fn create_and_start(docker: &Docker, config: &SafehouseConfig) -> Result<()> {
+    // Fix case-sensitivity issues: create lowercase symlinks so PZ's
+    // lowercased path lookups resolve on Linux. Must run BEFORE
+    // create_container because the :Z bind mount triggers SELinux
+    // relabeling — symlinks created afterward would lack container_file_t.
+    match fix_case(&config.server_install_dir) {
+        Ok(result) => {
+            if result.symlinks_created > 0 || result.symlinks_cleaned > 0 {
+                tracing::info!(
+                    created = result.symlinks_created,
+                    cleaned = result.symlinks_cleaned,
+                    failures = result.failures,
+                    "case-fix scan complete",
+                );
+            }
+            for w in &result.warnings {
+                tracing::warn!("case-fix: {w}");
+            }
+        }
+        Err(e) => tracing::warn!("case-fix scan failed, continuing: {e}"),
+    }
+
     // Clean up any leftover stopped container with the same name
     let _ = docker
         .remove_container(
@@ -312,5 +334,18 @@ pub async fn run_steamcmd_install(docker: &Docker, config: &SafehouseConfig) -> 
     }
 
     println!("PZ server installed.");
+
+    // Fix case-sensitivity issues on freshly downloaded files.
+    match fix_case(&config.server_install_dir) {
+        Ok(result) if result.symlinks_created > 0 => {
+            println!(
+                "Case-fix: created {} lowercase symlinks, cleaned {} dangling",
+                result.symlinks_created, result.symlinks_cleaned,
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("case-fix scan failed after install: {e}"),
+    }
+
     Ok(())
 }
