@@ -178,6 +178,8 @@ pub enum ModAction {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// Fix case-sensitivity issues by creating lowercase symlinks
+    FixCase,
 }
 
 #[derive(Subcommand)]

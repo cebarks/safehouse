@@ -3,6 +3,7 @@ use anyhow::Result;
 use super::common::CliContext;
 use super::{ModAction, ProfileAction};
 use crate::pz::ini::IniEditor;
+use crate::pz::case_fix::fix_case;
 use crate::pz::mods::{add_mod_to_ini, execute_collection_sync, list_mods, remove_mod_from_ini};
 use crate::steam::{fetch_mod_info, parse_collection_id};
 
@@ -17,6 +18,7 @@ pub async fn run(action: &ModAction, ctx: &CliContext) -> Result<()> {
         ModAction::Info { workshop_id } => info(ctx, workshop_id).await,
         ModAction::Sync { collection } => sync(ctx, collection.as_deref()).await,
         ModAction::Profile { action } => profile(ctx, action),
+        ModAction::FixCase => fix_case_cmd(ctx),
     }
 }
 
@@ -162,6 +164,23 @@ async fn sync(ctx: &CliContext, collection_arg: Option<&str>) -> Result<()> {
         "\nserver.ini updated — {} mod(s) active. Restart the server to apply.",
         result.total
     );
+    Ok(())
+}
+
+fn fix_case_cmd(ctx: &CliContext) -> Result<()> {
+    println!("Scanning {} for case-sensitivity issues...", ctx.config.server_install_dir.display());
+
+    let result = fix_case(&ctx.config.server_install_dir)?;
+
+    println!(
+        "Done: {} symlinks created, {} dangling cleaned, {} failures",
+        result.symlinks_created, result.symlinks_cleaned, result.failures,
+    );
+
+    for w in &result.warnings {
+        println!("  ⚠ {w}");
+    }
+
     Ok(())
 }
 
