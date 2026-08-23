@@ -12,7 +12,14 @@ async fn main() -> Result<()> {
         Command::Setup {
             install_dir,
             admin_password,
-        } => cli::setup::run(install_dir.as_deref(), admin_password.as_deref()).await,
+        } => {
+            cli::setup::run(
+                install_dir.as_deref(),
+                admin_password.as_deref(),
+                cli.data_dir.as_deref(),
+            )
+            .await
+        }
         Command::Server { action } => {
             let ctx = cli::common::resolve_context(&cli)?;
             cli::server::run(action, &ctx).await

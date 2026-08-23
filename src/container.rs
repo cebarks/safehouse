@@ -185,6 +185,15 @@ pub async fn remove(docker: &Docker) -> Result<()> {
 
 /// Stream container logs to stdout.
 pub async fn stream_logs(docker: &Docker, follow: bool, tail: usize) -> Result<()> {
+    stream_container_logs(docker, CONTAINER_NAME, follow, tail).await
+}
+
+async fn stream_container_logs(
+    docker: &Docker,
+    container: &str,
+    follow: bool,
+    tail: usize,
+) -> Result<()> {
     let options = LogsOptionsBuilder::default()
         .stdout(true)
         .stderr(true)
@@ -192,7 +201,7 @@ pub async fn stream_logs(docker: &Docker, follow: bool, tail: usize) -> Result<(
         .tail(tail.to_string().as_str())
         .build();
 
-    let mut stream = docker.logs(CONTAINER_NAME, Some(options));
+    let mut stream = docker.logs(container, Some(options));
 
     while let Some(result) = stream.next().await {
         match result {
@@ -265,16 +274,26 @@ pub async fn run_steamcmd_install(docker: &Docker, config: &SafehouseConfig) -> 
         .await
         .context("failed to start setup container")?;
 
-    // Stream logs while install runs
+    // Stream logs until the container exits (follow=true blocks until EOF)
     println!("Installing Project Zomboid dedicated server via SteamCMD...");
-    stream_logs(docker, true, 0).await.ok();
+    stream_container_logs(docker, "safehouse-setup", true, 0).await.ok();
 
-    // Wait for container to exit
-    let info = docker.inspect_container("safehouse-setup", None).await?;
-    let exit_code = info
-        .state
-        .and_then(|s| s.exit_code)
-        .unwrap_or(-1);
+    // Wait for the container to fully stop, then grab exit code
+    let mut wait_stream = docker.wait_container("safehouse-setup", None::<bollard::query_parameters::WaitContainerOptions>);
+    let exit_code = match wait_stream.next().await {
+        Some(Ok(resp)) => resp.status_code,
+        Some(Err(e)) => {
+            // Container may have already exited — try inspect as fallback
+            tracing::debug!("wait_container error (may already be stopped): {e}");
+            docker
+                .inspect_container("safehouse-setup", None)
+                .await?
+                .state
+                .and_then(|s| s.exit_code)
+                .unwrap_or(-1) as i64
+        }
+        None => -1,
+    };
 
     // Cleanup
     let _ = docker
