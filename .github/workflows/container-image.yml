@@ -4,13 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - 'Containerfile'
-      - '.github/workflows/container-image.yml'
+      - "Containerfile"
+      - ".github/workflows/container-image.yml"
   schedule:
     # Weekly rebuild to pick up SteamCMD self-updates baked into the image.
     # Without this, the image goes stale and runtime installs hit the
     # multi-restart self-update cycle that causes "Missing configuration" failures.
-    - cron: '0 6 * * 1'  # Monday 06:00 UTC
+    - cron: "0 6 * * 1" # Monday 06:00 UTC
   workflow_dispatch: # Manual trigger
 
 env:
