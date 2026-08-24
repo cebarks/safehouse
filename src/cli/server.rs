@@ -175,6 +175,11 @@ async fn status(ctx: &CliContext) -> Result<()> {
     );
     println!("Name:    {}", ctx.config.server_name);
     println!("Install: {}", ctx.config.server_install_dir.display());
+    if let Some(port) = ctx.config.jmx_port {
+        println!("JMX:     🟢 Enabled (127.0.0.1:{})", port);
+    } else {
+        println!("JMX:     ⚫ Disabled");
+    }
 
     if running {
         if let Ok(mut rcon) = crate::pz::rcon::RconClient::connect(

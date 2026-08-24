@@ -25,7 +25,7 @@ ENV LD_LIBRARY_PATH=/server/linux64:/server:/server/jre64/lib:/server/jre64/lib/
 ENV PATH=/server/jre64/bin:/steamcmd:$PATH
 
 WORKDIR /server
-EXPOSE 16261/udp 16262/udp 27015/tcp
+EXPOSE 16261/udp 16262/udp 27015/tcp 9010/tcp
 
 # PID 1 = Java process directly. No shell wrapper, no signal mismatch.
 ENTRYPOINT ["./ProjectZomboid64"]
