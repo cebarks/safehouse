@@ -5,3 +5,4 @@
 /dist
 .pi-subagents
 .pi
+.worktrees/
