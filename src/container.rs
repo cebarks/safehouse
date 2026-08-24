@@ -147,6 +147,18 @@ pub async fn create_and_start(docker: &Docker, config: &SafehouseConfig, image: 
         }]),
     );
 
+    // JMX remote monitoring (localhost-only, tunneled via SSH)
+    // JVM args are injected into ProjectZomboid64.json before container start.
+    if let Some(host_port) = config.jmx_port {
+        port_bindings.insert(
+            "9010/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("127.0.0.1".to_string()),
+                host_port: Some(host_port.to_string()),
+            }]),
+        );
+    }
+
     let host_config = HostConfig {
         binds: Some(binds),
         port_bindings: Some(port_bindings),

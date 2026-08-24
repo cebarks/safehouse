@@ -55,6 +55,21 @@ async fn start(ctx: &CliContext, timeout_secs: u64) -> Result<()> {
         tracing::info!("Wrote RCON settings to {}", server_ini_path.display());
     }
 
+    // Inject or clear JMX vmArgs in ProjectZomboid64.json
+    let json_path = ctx.config.server_install_dir.join("ProjectZomboid64.json");
+    if json_path.exists() {
+        crate::pz::jvm_config::apply_jmx(&ctx.config.server_install_dir, ctx.config.jmx_port)
+            .with_context(|| "failed to configure JMX in ProjectZomboid64.json")?;
+        if let Some(port) = ctx.config.jmx_port {
+            tracing::info!("JMX enabled in ProjectZomboid64.json (container port 9010 → host 127.0.0.1:{})", port);
+        }
+    } else if ctx.config.jmx_port.is_some() {
+        tracing::warn!(
+            "JMX requested but ProjectZomboid64.json not found in {}",
+            ctx.config.server_install_dir.display()
+        );
+    }
+
     // Start the container
     container::create_and_start(&docker, &ctx.config, &image).await?;
 
