@@ -39,6 +39,12 @@ pub struct SafehouseConfig {
     #[serde(default = "default_rcon_port")]
     pub rcon_port: u16,
 
+    /// JMX remote monitoring host port. `None` disables JMX (default).
+    /// When set, safehouse injects JMX vmArgs into ProjectZomboid64.json
+    /// and binds container port 9010 to 127.0.0.1:<jmx_port>.
+    #[serde(default)]
+    pub jmx_port: Option<u16>,
+
     /// Web UI bind address
     #[serde(default = "default_web_bind")]
     pub web_bind: String,
@@ -78,6 +84,7 @@ impl Default for SafehouseConfig {
             zomboid_data_dir: None,
             rcon_password: String::new(),
             rcon_port: default_rcon_port(),
+            jmx_port: None,
             web_bind: default_web_bind(),
             web_port: default_web_port(),
             discord_webhook_url: None,
@@ -150,6 +157,33 @@ mod tests {
         assert_eq!(cfg.rcon_port, 27015);
         assert_eq!(cfg.backup_retention_days, 7);
         assert!(cfg.rcon_password.is_empty());
+    }
+
+    #[test]
+    fn test_jmx_port_defaults_to_none() {
+        let cfg = SafehouseConfig::default();
+        assert!(cfg.jmx_port.is_none());
+    }
+
+    #[test]
+    fn test_jmx_port_round_trip() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("safehouse.toml");
+        let mut cfg = SafehouseConfig::default();
+        cfg.jmx_port = Some(9010);
+        cfg.save(&path).unwrap();
+        let loaded = SafehouseConfig::load(&path).unwrap();
+        assert_eq!(loaded.jmx_port, Some(9010));
+    }
+
+    #[test]
+    fn test_jmx_port_disabled_round_trip() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("safehouse.toml");
+        let cfg = SafehouseConfig::default();
+        cfg.save(&path).unwrap();
+        let loaded = SafehouseConfig::load(&path).unwrap();
+        assert!(loaded.jmx_port.is_none());
     }
 
     #[test]
