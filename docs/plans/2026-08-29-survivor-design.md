@@ -1,6 +1,7 @@
 # Survivor — Server-Authoritative Mod Distribution (Design)
 
 **Date:** 2026-08-29
+**Amended:** 2026-08-29 — added verified B42 `-modfolders` lever: workshop scanning can be disabled outright at launch, demoting unsubscribe to disk reclaim
 **Status:** Validated design, pre-implementation
 **Feature name:** Survivor · CLI namespace: `safehouse surv` · Client artifact: `survivor-agent.jar`
 
@@ -57,10 +58,28 @@ pull the latest versions; the server does not re-read mods until restart.
           Survivor agent (premain) → Zomboid/mods/ (local mods)
 ```
 
-Players keep **zero** workshop subscriptions after migration. Mods live as
-local mods in `Zomboid/mods/`; Steam auto-update is removed from the equation
-entirely. Byte-identical files on server + clients satisfy version checks
-(including `DoLuaChecksum`) by construction.
+Players launch with `-modfolders mods` (see "B42 `-modfolders` lever" below):
+the game never scans workshop content, so subscription state is irrelevant and
+Steam auto-update is removed from the equation entirely. Mods live as local
+mods in `Zomboid/mods/`. Unsubscribing (phase 2) is disk reclaim, not a
+correctness step. Byte-identical files on server + clients satisfy version
+checks (including `DoLuaChecksum`) by construction.
+
+### B42 `-modfolders` lever (verified 2026-08-29)
+
+PZ B42 accepts `-modfolders {folders}`, controlling which mod sources are
+scanned and their priority. Verified against the actual dedicated build on
+mars (`java/projectzomboid.jar` strings): `MainScreenState` parses the flag →
+`ZomboidFileSystem.setModFoldersOrder`; the default order string is
+**`workshop,steam,mods`** — i.e. workshop copies *shadow* local mods of the
+same ID when both exist, so the flag is mandatory for this design, not
+optional. With `-modfolders mods`, `steamapps/workshop/content` is never
+scanned: subscribed items are fully inert (no auto-update risk, no duplicate
+IDs), and unsubscribing becomes optional disk reclaim.
+
+Tradeoff: the flag is process-global — a player using the same PZ install for
+other workshop-based servers must drop the flag for those sessions (their
+subscriptions remain intact unless they ran phase-2 unsubscribe).
 
 ## Release Model
 
@@ -126,6 +145,9 @@ auth (baked into client builds) — bandwidth gate against strangers, nothing mo
 1. Mounts/symlinks `releases/<id>/files/` as the container's mod source.
 2. Writes `server.ini`: `WorkshopItems=` **empty**, `Mods=` from manifest `load_order`.
 3. Flips `active` symlink.
+4. Adds `-modfolders mods` to server launch args so the historical
+   `steamapps/workshop/content` tree on the server can never shadow release
+   files.
 
 Steam touches nothing at server runtime. **Pilot-verify item #1:** B42
 dedicated boots and serves with empty `WorkshopItems=` + local mods.
@@ -166,6 +188,9 @@ updating" when the download fails or the server is unreachable mid-sync.
 
 - Injected via launch args on the same surfaces ZB patches:
   `ProjectZomboid64.json` vmArgs, Steam launch options, `ProjectZomboid64.bat`.
+- Installer also inserts `-modfolders mods` on the same surfaces (verified B42
+  flag; see lever section). Without it, residual workshop copies shadow synced
+  local mods — default scan order is `workshop,steam,mods`.
 - **Argument order is the chain:** agents' `premain` run in arg order before
   `main()`. Installer inserts Survivor's agent arg **before** ZB's → sync
   completes → ZB initializes and discovers the freshly updated mod set
@@ -196,7 +221,8 @@ updating" when the download fails or the server is unreachable mid-sync.
 Small cross-platform installer (ZB-installer UX: detect → preview → confirm):
 1. Verify ZB present (Windows: zbNative).
 2. Copy agent jar to `Zomboid/surv/`.
-3. Insert Survivor arg before ZB arg on all patched launch surfaces.
+3. Insert Survivor arg before ZB arg and `-modfolders mods` on all patched
+   launch surfaces.
 4. Run first bootstrap sync (21 GiB) with the side-car GUI.
 
 ## Migration & Rollout
@@ -205,7 +231,7 @@ Small cross-platform installer (ZB-installer UX: detect → preview → confirm)
 |---|---|---|
 | 0 | admin | Build; authoritative `safehouse mods sync`; cross-check DB vs `pz-mod-list/reports/mod-names.json` (~446 expectation); cut r1; pilot (§Verification) |
 | 1 | group | Installer (Workshop storefront / GH release) → bootstrap sync. 2.5/1.25 Gbit fiber: no staggering needed (~70s/player at line rate) |
-| 2 | group | **After** verified sync: one-click unsubscribe-all on collection `3786678808` → Steam deletes ~21 GiB/player. Sync first, unsubscribe after — always |
+| 2 | group | Optional disk reclaim: one-click unsubscribe-all on collection `3786678808` → Steam deletes ~21 GiB/player. With `-modfolders mods` set, subscriptions are inert — this is storage hygiene, not correctness; sync first anyway |
 | 3 | admin | `safehouse server restart --release r1` → cutover complete |
 
 ZB runtime safety: ZB's jars live in the game dir (its installer copied them),
@@ -220,7 +246,7 @@ one-liner fallback.
 
 **Assumptions to prove experimentally before group rollout:**
 1. B42 dedicated boots & serves with empty `WorkshopItems=` + local mods *(the linchpin)*
-2. Clients join with zero workshop subscriptions; `DoLuaChecksum` satisfied by byte-identical local files
+2. Clients join with `-modfolders mods` set (subscription state irrelevant); `DoLuaChecksum` satisfied by byte-identical local files
 3. Side-car UI process spawns from premain despite game JVM headless (Win + Linux)
 4. Premain blocking + arg-order chain-loading works with ZB (freshly synced ZB jars load correctly)
 5. Plain `-javaagent` on Windows loads once zbNative is present
@@ -247,6 +273,7 @@ boots anyway) → corruption (flip bytes → client re-fetches).
 ## Decisions Log
 
 - Checksum: **xxh3-64** (drift/corruption detection, not adversarial integrity; PSK+TLS guard transport)
+- **`-modfolders mods`** on all client + server launch surfaces (B42-verified 2026-08-29 against the mars build): disables workshop scanning outright; the default order `workshop,steam,mods` would otherwise let stale workshop copies shadow pinned local mods
 - Client syncs to **active** release (server-running), not latest cut
 - Load order source: safehouse-managed `Mods=` line (B42 `\`-prefixed)
 - Release ids: `<date>-r<serial>`; retention policy mirrors backup pruning
@@ -256,7 +283,8 @@ boots anyway) → corruption (flip bytes → client re-fetches).
 
 - Empty-`WorkshopItems=` local-load on B42 dedicated (pilot #1 — if it fails,
   fallback: keep `WorkshopItems=` populated but mount release files over the
-  workshop content paths via symlinks/bind-mounts)
+  workshop content paths via symlinks/bind-mounts; server-side
+  `-modfolders mods` removes shadowing risk in both variants)
 - Hardlinks across container volume mounts (fallback: reflink/plain copy)
 - Case sensitivity: preserve exact author casing; Linux clients are
   case-sensitive (safehouse's existing `fix-case` knowledge applies)
